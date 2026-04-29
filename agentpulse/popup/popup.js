@@ -99,8 +99,8 @@ function combinedData() {
   const right = codex.usage || [];
   const count = Math.max(left.length, right.length);
   for (let index = 0; index < count; index += 1) {
-    if (left[index]) usage.push({ ...left[index], label: `Claude \u00b7 ${left[index].label}` });
-    if (right[index]) usage.push({ ...right[index], label: `Codex \u00b7 ${right[index].label}` });
+    if (left[index]) usage.push({ ...left[index], provider: 'Claude', label: left[index].label });
+    if (right[index]) usage.push({ ...right[index], provider: 'Codex', label: right[index].label });
   }
   return {
     profile: null,
@@ -240,14 +240,22 @@ function countdown(seconds) {
 function makeBar(entry) {
   const wrapper = document.createElement('div');
   wrapper.className = 'usage-entry';
+  wrapper.classList.toggle('warn', entry.warn);
   const header = document.createElement('div');
   header.className = 'bar-header';
+  const labelWrap = document.createElement('span');
+  labelWrap.className = 'bar-label';
+  const provider = document.createElement('span');
+  provider.className = 'provider-badge';
   const label = document.createElement('span');
   const percent = document.createElement('span');
   percent.className = 'bar-pct';
+  provider.textContent = entry.provider || '';
+  provider.classList.toggle('hidden', !entry.provider);
   label.textContent = entry.label;
+  labelWrap.append(provider, label);
   percent.textContent = entry.pct_text;
-  header.append(label, percent);
+  header.append(labelWrap, percent);
   const track = document.createElement('div');
   track.className = 'bar-container';
   const fill = document.createElement('div');
@@ -262,6 +270,11 @@ function makeBar(entry) {
 }
 
 function updateBar(wrapper, entry) {
+  wrapper.classList.toggle('warn', entry.warn);
+  const provider = wrapper.querySelector('.provider-badge');
+  provider.textContent = entry.provider || '';
+  provider.classList.toggle('hidden', !entry.provider);
+  wrapper.querySelector('.bar-label span:last-child').textContent = entry.label;
   wrapper.querySelector('.bar-pct').textContent = entry.pct_text;
   const fill = wrapper.querySelector('.bar-fill');
   fill.style.width = `${entry.fill_pct * 100}%`;

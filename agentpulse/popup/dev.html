@@ -70,7 +70,7 @@ const COLORS = {
 };
 const T = {
     title: 'Agents Pulse', account: 'ACCOUNT', email: 'Email', plan: 'Plan',
-    usage: 'USAGE', extra_usage: 'EXTRA USAGE', claude_code: 'CLAUDE CODE', changelog: 'Changelog',
+    usage: 'USAGE', extra_usage: 'EXTRA USAGE', claude_code: 'CLAUDE CODE', codex_cli: 'CODEX CLI', changelog: 'Changelog',
     status_updated_s: 'Updated {s}s ago', status_updated: 'Updated {duration} ago',
     status_next_update: 'Next update in {duration}', status_refreshing: 'Refreshing...',
     duration_hm: '{h}h {m}m', duration_m: '{m}m', duration_s: '{s}s',
@@ -147,7 +147,7 @@ function resolvePreset(name) {
 
 // Stub pywebview.api so popup.js doesn't throw
 function applyPreset(name) {
-    win().init({ colors: COLORS, t: T, app_version: '1.13.0', data: resolvePreset(name) });
+    win().init({ colors: COLORS, t: T, app_version: '1.13.0', codex_enabled: true, data: resolvePreset(name), codex_data: resolveCodexPreset(name) });
 }
 
 let initialized = false;
@@ -155,7 +155,7 @@ let initialized = false;
 function loadPreset(name) {
     location.hash = name;
     if (initialized) {
-        win().updateData(resolvePreset(name));
+        win().updateBothData(resolvePreset(name), resolveCodexPreset(name));
     } else {
         applyPreset(name);
         initialized = true;
@@ -176,7 +176,19 @@ function randomize() {
         data.extra.fill_pct = pct / 100;
         data.extra.pct_text = pct + '%';
     }
-    win().updateData(data);
+    win().updateBothData(data, resolveCodexPreset('minimal'));
+}
+
+function resolveCodexPreset(name) {
+    const data = resolvePreset(name === 'error' ? 'minimal' : 'full');
+    data.profile = null;
+    data.extra = null;
+    data.installations = [{ name: 'CLI', version: '0.9.0' }];
+    data.usage = data.usage.slice(0, 2).map((entry, index) => {
+        const pct = index === 0 ? 17 : 48;
+        return { ...entry, pct_text: pct + '%', fill_pct: pct / 100, warn: false };
+    });
+    return data;
 }
 
 // First load: inject pywebview stub, then apply the preset from the URL hash

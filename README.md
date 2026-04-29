@@ -2,6 +2,14 @@
 
 Monitor Claude and Codex API usage from your Windows system tray. See at a glance how much of your session and weekly quota you've used, get desktop alerts before you run out, and automate actions when quotas reset.
 
+## Screenshots
+
+![Agents Pulse combined Claude and Codex usage popup with tray icon](Screens/popup-all-tray.png)
+
+![Claude usage detail popup with account, quota, and extra usage](Screens/popup-claude-detail.png)
+
+![Compact combined usage popup near the Windows tray](Screens/popup-all-compact.png)
+
 ## Features
 
 ### Getting started
@@ -11,8 +19,8 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Daily visible value
 
-- **Live tray icon** - a compact `AP` mark sits in your taskbar and adapts to your taskbar's light or dark theme.
-- **Detail popup** - left-click the icon to see a full breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
+- **Live tray icon** - compact usage rows show current 5-hour Claude and Codex usage directly in the taskbar and adapt to your taskbar's light or dark theme.
+- **Detail popup** - left-click the icon to see a polished breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
 ### Proactive protection

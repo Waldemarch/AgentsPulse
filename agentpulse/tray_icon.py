@@ -18,6 +18,10 @@ THEME_REG_VALUE = 'SystemUsesLightTheme'
 REG_NOTIFY_CHANGE_LAST_SET = 0x00000004
 _SIZE = 64
 _CLEAR = (0, 0, 0, 0)
+_TRACK = (98, 104, 112, 95)
+_CLAUDE = (237, 129, 92, 255)
+_CODEX = (82, 148, 255, 255)
+_WARN = (230, 80, 80, 255)
 
 
 @functools.lru_cache(maxsize=None)
@@ -62,19 +66,38 @@ def _palette(light_taskbar: bool) -> dict[str, tuple[int, int, int, int]]:
     return ICON_DARK if light_taskbar else ICON_LIGHT
 
 
-def _fit_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, y: int, color: tuple[int, ...], stroke: int = 0) -> None:
-    box = draw.textbbox((0, 0), text, font=font, stroke_width=stroke)
-    width = box[2] - box[0]
-    draw.text(((_SIZE - width) / 2 - box[0], y - box[1]), text, fill=color, font=font, stroke_width=stroke, stroke_fill=color)
+def _usage_color(pct: float, base: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    if pct >= 95:
+        return _WARN
+    return base
 
 
-def _icon_font(draw: ImageDraw.ImageDraw, text: str) -> ImageFont.ImageFont:
-    for size in (34, 32, 30, 28, 26, 24):
-        font = load_font(size)
-        box = draw.textbbox((0, 0), text, font=font)
-        if box[2] - box[0] <= _SIZE - 2 and box[3] - box[1] <= _SIZE - 2:
-            return font
-    return load_font(22)
+def _draw_usage_row(
+    draw: ImageDraw.ImageDraw,
+    label: str,
+    pct: float,
+    y: int,
+    base_color: tuple[int, int, int, int],
+    text_color: tuple[int, int, int, int],
+) -> None:
+    pct = max(0.0, min(100.0, pct))
+    font = load_font(16)
+    draw.text((1, y - 3), label, fill=text_color, font=font)
+
+    left = 16
+    top = y
+    right = 57
+    bottom = y + 17
+    fill_right = left + int((right - left) * pct / 100)
+    color = _usage_color(pct, base_color)
+    draw.rounded_rectangle((left, top, right, bottom), radius=3, fill=_TRACK)
+    if pct > 0:
+        draw.rounded_rectangle((left, top, max(left + 2, fill_right), bottom), radius=3, fill=color)
+
+    pct_text = f'{pct:.0f}'
+    pct_font = load_font(12)
+    box = draw.textbbox((0, 0), pct_text, font=pct_font)
+    draw.text((_SIZE - (box[2] - box[0]) - 1, y + 17), pct_text, fill=text_color, font=pct_font)
 
 
 def create_icon_image(
@@ -87,16 +110,13 @@ def create_icon_image(
     time_pct_top: float | None = None,
     time_pct_bottom: float | None = None,
 ) -> Image.Image:
-    """Create a 64px RGBA icon with the Agents Pulse initials."""
+    """Create a 64px RGBA icon with compact Claude and Codex usage rows."""
     colors = _palette(light_taskbar)
     image = Image.new('RGBA', (_SIZE, _SIZE), _CLEAR)
     draw = ImageDraw.Draw(image)
 
-    text = 'AP'
-    font = _icon_font(draw, text)
-    box = draw.textbbox((0, 0), text, font=font)
-    y = (_SIZE - (box[3] - box[1])) / 2 - box[1]
-    _fit_text(draw, text, font, int(y), colors['fg'])
+    _draw_usage_row(draw, 'C', pct_top, 5, _CLAUDE, colors['fg'])
+    _draw_usage_row(draw, 'X', pct_bottom, 36, _CODEX, colors['fg'])
     return image
 
 

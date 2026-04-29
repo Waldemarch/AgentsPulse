@@ -931,7 +931,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day': {'utilization': 10.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(42.0, light_taskbar=False)
+        mock_icon.assert_called_once_with(42.0, 10.0, light_taskbar=False)
         self.assertEqual(self.app.icon.title, 'Usage: 42%')
 
     @patch('agentpulse.app.format_tooltip', return_value='Error')
@@ -959,20 +959,20 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {}, 'seven_day': {'utilization': None}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, light_taskbar=False)
+        mock_icon.assert_called_once_with(0, 0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
-    def test_custom_icon_fields_do_not_change_tray_percent(self, mock_icon, _tooltip):
-        """Tray icon always shows the five-hour session usage."""
+    def test_custom_icon_fields_do_not_change_tray_rows(self, mock_icon, _tooltip):
+        """Tray icon always shows Claude five-hour usage over the fallback row."""
         self.app._last_response = {
             'five_hour': {'utilization': 30.0},
             'seven_day_sonnet': {'utilization': 75.0},
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(30.0, light_taskbar=False)
+        mock_icon.assert_called_once_with(30.0, 0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -982,27 +982,27 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'seven_day': {'utilization': 42.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, light_taskbar=False)
+        mock_icon.assert_called_once_with(0, 42.0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_non_five_hour_null_in_response_is_ignored(self, mock_icon, _tooltip):
-        """Only five-hour usage is used for the tray icon."""
+        """Only available session and fallback rows are used for the tray icon."""
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day_sonnet': None}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(42.0, light_taskbar=False)
+        mock_icon.assert_called_once_with(42.0, 0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    def test_codex_five_hour_can_drive_tray_percent(self, mock_icon, _tooltip):
-        """Codex five-hour usage is shown when it is higher than Claude."""
+    def test_codex_five_hour_renders_as_bottom_row(self, mock_icon, _tooltip):
+        """Codex five-hour usage is shown as the second tray row."""
         self.app._last_response = {'five_hour': {'utilization': 55.0}}
         self.app._last_codex_response = {'five_hour': {'utilization': 70.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(70.0, light_taskbar=False)
+        mock_icon.assert_called_once_with(55.0, 70.0, light_taskbar=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1029,7 +1029,7 @@ class TestOnThemeChanged(unittest.TestCase):
         self.app._on_theme_changed()
 
         self.assertTrue(self.app._light_taskbar)
-        mock_icon.assert_called_once_with(50.0, light_taskbar=True)
+        mock_icon.assert_called_once_with(50.0, 20.0, light_taskbar=True)
 
     @patch('agentpulse.app.taskbar_uses_light_theme', return_value=False)
     def test_same_theme_no_render(self, _theme):

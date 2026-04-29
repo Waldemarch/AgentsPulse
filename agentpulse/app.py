@@ -227,13 +227,14 @@ class AgentPulse:
             self.icon.title = format_tooltip(data, codex or None)
             return
 
-        entries = [self._provider_entry(data, 'five_hour')]
-        if codex_available:
-            candidate = self._provider_entry(codex, 'five_hour')
-            if (candidate.get('utilization', 0) or 0) > (entries[0].get('utilization', 0) or 0):
-                entries[0] = candidate
+        claude_session = self._provider_entry(data, 'five_hour')
+        bottom_entry = self._provider_entry(codex, 'five_hour') if codex_available else self._provider_entry(data, 'seven_day')
 
-        self.icon.icon = create_icon_image(entries[0].get('utilization', 0) or 0, light_taskbar=self._light_taskbar)
+        self.icon.icon = create_icon_image(
+            claude_session.get('utilization', 0) or 0,
+            bottom_entry.get('utilization', 0) or 0,
+            light_taskbar=self._light_taskbar,
+        )
         self.icon.title = format_tooltip(data, codex if codex else None)
 
     def _on_theme_changed(self) -> None:
