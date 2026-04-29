@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span id="title"></span>
+    <nav id="tabBar" class="hidden" aria-label="Provider">
+      <button type="button" class="tab-btn active" data-tab="all">All</button>
+      <button type="button" class="tab-btn" data-tab="claude">Claude</button>
+      <button type="button" class="tab-btn" data-tab="codex">Codex</button>
+    </nav>
+    <button type="button" id="closeBtn" aria-label="Close">x</button>
+  </header>
+
+  <section id="accountSection">
+    <h2 id="headingAccount"></h2>
+    <dl>
+      <div id="emailRow"><dt id="labelEmail"></dt><dd id="emailValue"></dd></div>
+      <div id="planRow"><dt id="labelPlan"></dt><dd id="planValue"></dd></div>
+    </dl>
+  </section>
+
+  <section id="usageSection">
+    <h2 id="headingUsage"></h2>
+    <div id="usageBars"></div>
+  </section>
+
+  <section id="extraSection">
+    <h2 id="headingExtraUsage"></h2>
+    <div class="bar-header"><span id="extraSpent"></span><span id="extraPct"></span></div>
+    <div class="bar-container"><div class="bar-fill" id="extraFill"></div></div>
+  </section>
+
+  <section id="installSection">
+    <div class="heading-row"><h2 id="headingInstall"></h2><span id="changelogLink"></span></div>
+    <dl id="installRows"></dl>
+  </section>
+
+  <footer id="statusSection">
+    <span id="statusText"></span>
+    <span id="appVersion"></span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

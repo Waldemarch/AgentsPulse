@@ -1,0 +1,241 @@
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: #f6f7f9;
+    color: #20242a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    align-items: center;
+    padding: 22px 28px;
+    background: #ffffff;
+    border-bottom: 1px solid #d9dee7;
+}
+
+h1, h2, p { margin: 0; }
+h1 { font-size: 24px; }
+h2 { font-size: 16px; }
+
+#subtitle {
+    margin-top: 4px;
+    color: #667085;
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+select, a {
+    height: 32px;
+    border: 1px solid #c7cfdb;
+    background: #fff;
+    color: #20242a;
+    border-radius: 6px;
+    padding: 0 10px;
+    font: inherit;
+}
+
+button, input {
+    border: 1px solid #c7cfdb;
+    border-radius: 6px;
+    font: inherit;
+}
+
+button {
+    height: 34px;
+    padding: 0 12px;
+    background: #20242a;
+    color: #fff;
+    cursor: pointer;
+}
+
+input {
+    min-height: 34px;
+    padding: 6px 8px;
+}
+
+a {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 22px;
+}
+
+section {
+    background: #ffffff;
+    border: 1px solid #d9dee7;
+    border-radius: 8px;
+    padding: 18px;
+}
+
+.provider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+}
+
+.provider-card {
+    background: #ffffff;
+    border: 1px solid #d9dee7;
+    border-radius: 8px;
+    padding: 18px;
+}
+
+.provider-title, .section-head, .metric-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+}
+
+.provider-title span, .section-head span, .muted {
+    color: #667085;
+    font-size: 12px;
+}
+
+.usage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.metric-row strong { font-size: 22px; }
+
+.bar {
+    height: 8px;
+    margin-top: 7px;
+    background: #e8edf3;
+    overflow: hidden;
+}
+
+.fill {
+    height: 100%;
+    background: #1f7aec;
+    transition: width 0.25s ease;
+}
+
+.fill.warn { background: #d64545; }
+
+canvas {
+    width: 100%;
+    display: block;
+    margin-top: 14px;
+}
+
+.diagnostics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.diag, .prediction {
+    border: 1px solid #e2e7ef;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.prediction-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.prediction {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.prediction strong {
+    font-size: 20px;
+}
+
+.prediction.ok strong { color: #0f7a4f; }
+.prediction.warn strong { color: #b42318; }
+
+.heatmap {
+    display: grid;
+    grid-template-columns: 72px repeat(24, minmax(18px, 1fr));
+    gap: 4px;
+    margin-top: 14px;
+    align-items: center;
+}
+
+.heatmap-label {
+    color: #667085;
+    font-size: 12px;
+    text-transform: capitalize;
+}
+
+.heatmap-cell {
+    min-height: 26px;
+    border-radius: 4px;
+    background: #1f7aec;
+    color: #ffffff;
+    font-size: 10px;
+    line-height: 26px;
+    text-align: center;
+}
+
+.error { color: #b42318; }
+
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.settings-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-grid label span {
+    color: #667085;
+    font-size: 12px;
+}
+
+.settings-grid input[type="checkbox"] {
+    width: 20px;
+    min-height: 20px;
+}
+
+.settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: end;
+}
+
+@media (max-width: 680px) {
+    header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    main { padding: 14px; }
+}

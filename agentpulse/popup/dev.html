@@ -1,0 +1,195 @@
+<!--
+    Dev preview for the popup UI.
+
+    Start server from the project root:
+        python -m http.server 8080 -d agentpulse/popup
+
+    Then open: http://localhost:8080/dev.html
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Popup Dev Preview</title>
+<style>
+    body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: #0a0a0a;
+        font-family: system-ui, sans-serif;
+    }
+
+    .dev-controls {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        & button {
+            padding: 6px 14px;
+            background: #333;
+            color: #ccc;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+
+            &:hover { background: #444; }
+        }
+    }
+
+    iframe {
+        border: none;
+        width: 340px;
+        background: #1e1e1e;
+        visibility: hidden;
+    }
+</style>
+</head>
+<body>
+<div class="dev-controls">
+    <button onclick="loadPreset('full')">Full data</button>
+    <button onclick="loadPreset('minimal')">Minimal</button>
+    <button onclick="loadPreset('error')">Error state</button>
+    <button onclick="loadPreset('refreshing')">Refreshing</button>
+    <button onclick="loadPreset('loading')">Initial load</button>
+    <button onclick="randomize()">Randomize bars</button>
+</div>
+
+<iframe id="popup" src="popup.html"></iframe>
+
+<script>
+const COLORS = {
+    bg: '#1e1e1e', fg: '#cccccc', fg_dim: '#888888', fg_heading: '#ffffff', fg_link: '#4a9eff',
+    bar_bg: '#333333', bar_fg: '#4a9eff', bar_fg_warn: '#e05050', bar_divider: '#000c', bar_marker: '#fffc',
+};
+const T = {
+    title: 'Agents Pulse', account: 'ACCOUNT', email: 'Email', plan: 'Plan',
+    usage: 'USAGE', extra_usage: 'EXTRA USAGE', claude_code: 'CLAUDE CODE', changelog: 'Changelog',
+    status_updated_s: 'Updated {s}s ago', status_updated: 'Updated {duration} ago',
+    status_next_update: 'Next update in {duration}', status_refreshing: 'Refreshing...',
+    duration_hm: '{h}h {m}m', duration_m: '{m}m', duration_s: '{s}s',
+};
+
+const PRESETS = {
+    full: {
+        profile: { email: 'user@example.com', plan: 'Max (Team)' },
+        usage: [
+            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42, warn: false,
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35 },
+            { label: 'Weekly (7 day)', pct_text: '65%', fill_pct: 0.65, warn: true,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
+            { label: 'Weekly (Sonnet)', pct_text: '30%', fill_pct: 0.30, warn: false,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
+            { label: 'Weekly (Opus)', pct_text: '12%', fill_pct: 0.12, warn: false,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
+        ],
+        extra: { pct_text: '23%', fill_pct: 0.23, spent_text: '$4.60 / $20.00 spent' },
+        installations: [
+            { name: 'CLI', version: '2.1.69' },
+            { name: 'VS Code', version: '2.1.69' },
+            { name: 'Cursor', version: '2.1.65' },
+        ],
+        status: () => ({ last_success_time: now() - 3, next_poll_time: now() + 20, refreshing: false, error: null }),
+    },
+    minimal: {
+        profile: null,
+        usage: [
+            { label: 'Session (5hr)', pct_text: '10%', fill_pct: 0.10, warn: false,
+              reset_text: 'Resets in 4h 50m (17:00)', midnights: [], marker_rel: 0.03 },
+        ],
+        extra: null,
+        installations: [],
+        status: () => ({ last_success_time: now() - 90, next_poll_time: now() + 90, refreshing: false, error: null }),
+    },
+    error: {
+        profile: { email: 'user@example.com', plan: 'Max' },
+        usage: [
+            { label: 'Session (5hr)', pct_text: '95%', fill_pct: 0.95, warn: true,
+              reset_text: 'Resets in 12m (12:12)', midnights: [], marker_rel: 0.96 },
+            { label: 'Weekly (7 day)', pct_text: '88%', fill_pct: 0.88, warn: true,
+              reset_text: 'Resets tomorrow, 08:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.80 },
+        ],
+        extra: null,
+        installations: [{ name: 'CLI', version: '2.1.69' }],
+        status: () => ({ last_success_time: now() - 300, next_poll_time: now() + 30, refreshing: false, error: 'Could not connect to Anthropic API.' }),
+    },
+    refreshing: {
+        profile: { email: 'user@example.com', plan: 'Max (Team)' },
+        usage: [
+            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42, warn: false,
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35 },
+        ],
+        extra: null,
+        installations: [{ name: 'CLI', version: '2.1.69' }],
+        status: () => ({ last_success_time: now() - 180, next_poll_time: null, refreshing: true, error: null }),
+    },
+    loading: {
+        profile: null, usage: [], extra: null, installations: [],
+        status: { text: 'Refreshing...', is_error: false, refreshing: true },
+    },
+};
+
+const iframe = document.getElementById('popup');
+const win = () => iframe.contentWindow;
+const now = () => Date.now() / 1000;
+
+function resolvePreset(name) {
+    const preset = PRESETS[name];
+    const status = typeof preset.status === 'function' ? preset.status() : preset.status;
+    return { ...structuredClone({ ...preset, status: null }), status };
+}
+
+// Stub pywebview.api so popup.js doesn't throw
+function applyPreset(name) {
+    win().init({ colors: COLORS, t: T, app_version: '1.13.0', data: resolvePreset(name) });
+}
+
+let initialized = false;
+
+function loadPreset(name) {
+    location.hash = name;
+    if (initialized) {
+        win().updateData(resolvePreset(name));
+    } else {
+        applyPreset(name);
+        initialized = true;
+    }
+}
+
+function randomize() {
+    location.hash = 'randomize';
+    const data = resolvePreset('full');
+    for (const entry of data.usage) {
+        const pct = Math.round(Math.random() * 100);
+        entry.fill_pct = pct / 100;
+        entry.pct_text = pct + '%';
+        entry.warn = entry.marker_rel !== null && pct / 100 > entry.marker_rel;
+    }
+    if (data.extra) {
+        const pct = Math.round(Math.random() * 100);
+        data.extra.fill_pct = pct / 100;
+        data.extra.pct_text = pct + '%';
+    }
+    win().updateData(data);
+}
+
+// First load: inject pywebview stub, then apply the preset from the URL hash
+iframe.addEventListener('load', () => {
+    win().pywebview = { api: { close() {}, open_url() {}, report_height(h) {
+        iframe.style.height = h + 'px';
+        iframe.style.visibility = 'visible';
+    }}};
+    const hash = location.hash.slice(1);
+    applyPreset(PRESETS[hash] ? hash : 'full');
+    initialized = true;
+    if (hash === 'randomize') randomize();
+}, { once: true });
+</script>
+</body>
+</html>

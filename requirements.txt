@@ -1,0 +1,5 @@
+pystray
+Pillow
+requests
+pywebview
+pyinstaller

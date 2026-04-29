@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents Pulse Dashboard</title>
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<header>
+    <div>
+        <h1>Agents Pulse</h1>
+        <p id="subtitle">Local usage dashboard</p>
+    </div>
+    <div class="actions">
+        <select id="rangeSelect" aria-label="History range">
+            <option value="24h">24h</option>
+            <option value="7d">7d</option>
+            <option value="30d">30d</option>
+        </select>
+        <a id="exportCsv" href="/api/history.csv?range=24h">CSV</a>
+    </div>
+</header>
+
+<main>
+    <section id="providers" class="provider-grid"></section>
+
+    <section>
+        <div class="section-head">
+            <h2>Usage History</h2>
+            <span id="historyMeta"></span>
+        </div>
+        <canvas id="usageChart" height="260"></canvas>
+    </section>
+
+    <section>
+        <div class="section-head">
+            <h2>Burn Rate</h2>
+            <span id="burnMeta"></span>
+        </div>
+        <canvas id="burnChart" height="220"></canvas>
+    </section>
+
+    <section id="predictionSection">
+        <div class="section-head">
+            <h2>Predictions</h2>
+            <span id="predictionMeta"></span>
+        </div>
+        <div id="predictions" class="prediction-grid"></div>
+    </section>
+
+    <section id="heatmapSection">
+        <div class="section-head">
+            <h2>Usage Heatmap</h2>
+            <span id="heatmapMeta"></span>
+        </div>
+        <div id="heatmap" class="heatmap"></div>
+    </section>
+
+    <section>
+        <div class="section-head">
+            <h2>Diagnostics</h2>
+            <span>localhost only, token-free payloads</span>
+        </div>
+        <div id="diagnostics" class="diagnostics"></div>
+    </section>
+
+    <section>
+        <div class="section-head">
+            <h2>Settings</h2>
+            <span id="settingsStatus">restart required after save</span>
+        </div>
+        <form id="settingsForm" class="settings-grid">
+            <label><span>Codex monitoring</span><input id="codexEnabled" type="checkbox"></label>
+            <label><span>Icon fields</span><input id="iconFields" type="text"></label>
+            <label><span>Tooltip fields</span><input id="tooltipFields" type="text"></label>
+            <label><span>Claude 5h thresholds</span><input id="thresholdClaude5h" type="text"></label>
+            <label><span>Claude 7d thresholds</span><input id="thresholdClaude7d" type="text"></label>
+            <label><span>Codex 5h thresholds</span><input id="thresholdCodex5h" type="text"></label>
+            <label><span>Codex 7d thresholds</span><input id="thresholdCodex7d" type="text"></label>
+            <label><span>Predictions</span><input id="predictionEnabled" type="checkbox"></label>
+            <label><span>Predict day until</span><input id="predictionDayEnd" type="time"></label>
+            <label><span>Heatmap</span><input id="heatmapEnabled" type="checkbox"></label>
+            <label><span>Quiet hours</span><input id="quietHoursEnabled" type="checkbox"></label>
+            <label><span>Quiet starts</span><input id="quietHoursStart" type="time"></label>
+            <label><span>Quiet ends</span><input id="quietHoursEnd" type="time"></label>
+            <label><span>Reset command</span><input id="resetCommand" type="text"></label>
+            <label><span>Threshold command</span><input id="thresholdCommand" type="text"></label>
+            <div class="settings-actions">
+                <button type="submit">Save Settings</button>
+                <button type="button" id="testReset">Test Reset</button>
+                <button type="button" id="testThreshold">Test Threshold</button>
+            </div>
+        </form>
+    </section>
+</main>
+
+<script src="/dashboard.js"></script>
+</body>
+</html>
