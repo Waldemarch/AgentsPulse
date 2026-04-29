@@ -68,17 +68,23 @@ def _fit_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, y
     draw.text(((_SIZE - width) / 2 - box[0], y - box[1]), text, fill=color, font=font, stroke_width=stroke, stroke_fill=color)
 
 
-def _bar_fill_width(pct: float, mode: str, time_pct: float | None) -> int:
-    pct = max(0.0, min(100.0, pct))
-    if mode == 'overage' and time_pct is not None and time_pct < 100:
-        over = max(0.0, pct - max(0.0, time_pct))
-        pct = over / (100.0 - time_pct) * 100.0
-    return max(0, min(_SIZE, int(_SIZE * pct / 100.0)))
+def _percent_text(pct: float) -> str:
+    pct = max(0.0, min(999.0, pct))
+    return f'{pct:.0f}%'
+
+
+def _percent_font(draw: ImageDraw.ImageDraw, text: str) -> ImageFont.ImageFont:
+    for size in (31, 29, 27, 25, 23, 21):
+        font = load_font(size)
+        box = draw.textbbox((0, 0), text, font=font)
+        if box[2] - box[0] <= _SIZE - 2 and box[3] - box[1] <= _SIZE - 2:
+            return font
+    return load_font(20)
 
 
 def create_icon_image(
     pct_top: float,
-    pct_bottom: float,
+    pct_bottom: float = 0,
     light_taskbar: bool = False,
     *,
     mode_top: str = 'utilization',
@@ -86,28 +92,16 @@ def create_icon_image(
     time_pct_top: float | None = None,
     time_pct_bottom: float | None = None,
 ) -> Image.Image:
-    """Create a 64px RGBA icon with a glyph and two horizontal meters."""
+    """Create a 64px RGBA icon showing the 5-hour session usage percent."""
     colors = _palette(light_taskbar)
     image = Image.new('RGBA', (_SIZE, _SIZE), _CLEAR)
     draw = ImageDraw.Draw(image)
 
-    if pct_top >= 100:
-        _fit_text(draw, '\u2715', load_font(36, symbol=True), 0, colors['fg'], stroke=2)
-    elif pct_top > 50:
-        _fit_text(draw, f'{pct_top:.0f}', load_font(40), 0, colors['fg'])
-    else:
-        _fit_text(draw, 'C', load_font(42), 0, colors['fg'])
-
-    bar_h = 9
-    rows = (
-        (_SIZE - bar_h * 2 - 3, pct_top, mode_top, time_pct_top),
-        (_SIZE - bar_h, pct_bottom, mode_bottom, time_pct_bottom),
-    )
-    for y, pct, mode, time_pct in rows:
-        draw.rectangle((0, y, _SIZE - 1, y + bar_h - 1), fill=colors['fg_half'])
-        width = _bar_fill_width(pct, mode, time_pct)
-        if width:
-            draw.rectangle((0, y, width - 1, y + bar_h - 1), fill=colors['fg'])
+    text = _percent_text(pct_top)
+    font = _percent_font(draw, text)
+    box = draw.textbbox((0, 0), text, font=font)
+    y = (_SIZE - (box[3] - box[1])) / 2 - box[1]
+    _fit_text(draw, text, font, int(y), colors['fg'])
     return image
 
 

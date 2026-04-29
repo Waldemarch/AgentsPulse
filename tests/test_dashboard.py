@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock, patch
+import socket
 import time
 
-from agentpulse.dashboard import DashboardHistory, _status_payload
+from agentpulse.dashboard import DashboardHistory, DashboardServer, _status_payload
 
 
 class TestDashboardHistory(unittest.TestCase):
@@ -74,6 +75,23 @@ class TestStatusPayload(unittest.TestCase):
         self.assertNotIn('profile', payload['providers'][0])
         self.assertNotIn('access_token', str(payload).lower())
         self.assertEqual(payload['providers'][0]['usage'][0]['utilization'], 50.0)
+
+
+class TestDashboardServer(unittest.TestCase):
+    def test_start_uses_next_port_when_configured_port_is_busy(self):
+        sock = socket.socket()
+        sock.bind(('127.0.0.1', 0))
+        sock.listen()
+        busy_port = sock.getsockname()[1]
+        server = DashboardServer(MagicMock(), port=busy_port)
+        try:
+            url = server.start()
+
+            self.assertNotEqual(server._httpd.server_address[1], busy_port)
+            self.assertTrue(url.startswith('http://127.0.0.1:'))
+        finally:
+            server.stop()
+            sock.close()
 
 
 if __name__ == '__main__':

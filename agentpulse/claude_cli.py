@@ -8,7 +8,7 @@ from pathlib import Path
 
 CLAUDE_CLI_PATH = Path.home() / '.local' / 'bin' / 'claude.exe'
 CHANGELOG_URL = 'https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md'
-PROJECT_URL = 'https://github.com/Waldemarch/usage-monitor-for-claude-and-codex'
+PROJECT_URL = 'https://github.com/Waldemarch/AgentsPulse'
 
 __all__ = [
     'CHANGELOG_URL', 'CLAUDE_CLI_PATH', 'PROJECT_URL',

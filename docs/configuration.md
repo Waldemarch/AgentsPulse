@@ -89,42 +89,9 @@ Must be an array of non-empty strings. `"*"` may appear at most once. Duplicates
 }
 ```
 
-## Tray icon bars
+## Tray icon
 
-The tray icon displays two small progress bars. By default, these show the session (5h) and weekly (7d) quotas. Use `icon_fields` to choose which two API fields are displayed.
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `icon_fields` | `["five_hour", "seven_day"]` | Which two usage fields to show as icon bars. The first entry is the top bar (also determines the icon text), the second is the bottom bar |
-
-Must be an array of exactly 2 non-empty strings. Unknown field names are accepted - if a field is `null` or missing from the API response, the bar shows 0%.
-
-**Known field names:** `five_hour`, `seven_day`, `seven_day_sonnet`, `seven_day_opus`, `seven_day_cowork`, `seven_day_oauth_apps`
-
-Each entry can optionally include a display mode suffix using colon syntax: `"field_name:mode"`.
-
-**Available bar display modes:**
-
-| Mode | Description |
-|------|-------------|
-| `utilization` | *(default)* Fills left-to-right proportional to current usage |
-| `overage` | Shows how far usage has entered the over-budget zone: empty when usage is at or below the time marker (on pace or ahead), half-filled when usage is halfway between the time marker and 100%, full when usage reaches 100% |
-
-**Example** - show session in overage mode and weekly in default mode:
-
-```json
-{
-    "icon_fields": ["five_hour:overage", "seven_day"]
-}
-```
-
-**Example** - show session and Sonnet quota (default utilization mode):
-
-```json
-{
-    "icon_fields": ["five_hour", "seven_day_sonnet"]
-}
-```
+The tray icon displays the current session (5h) usage as a compact percentage. It always uses the `five_hour` API field; use `tooltip_fields` to choose which fields appear when hovering over the icon.
 
 ## Event commands
 
@@ -154,9 +121,9 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 
 ## Local dashboard
 
-Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8765`. The dashboard stores an in-memory, token-free ring buffer of usage snapshots for up to 30 days (or 12,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range.
+Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard stores an in-memory, token-free ring buffer of usage snapshots for up to 30 days (or 12,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range.
 
-The dashboard is intentionally not exposed on the network. Usage history is not written to disk. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex enablement, tray icon fields, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
+The dashboard is intentionally not exposed on the network. Usage history is not written to disk. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
 
 Burn-rate and ETA values are calculated locally from the current utilization, reset time, and period length. A healthy pace means the current utilization is at or below the percentage of time elapsed in that quota period.
 

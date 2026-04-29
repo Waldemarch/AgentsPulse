@@ -26,7 +26,7 @@ from .i18n import T
 from .idle import get_idle_seconds, is_workstation_locked
 from .popup import UsagePopup
 from .settings import (
-    ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, ICON_FIELDS, IDLE_PAUSE,
+    ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, DASHBOARD_PORT, ICON_FIELDS, IDLE_PAUSE,
     ON_RESET_COMMAND, ON_THRESHOLD_COMMAND, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA,
     POLL_INTERVAL, QUIET_HOURS_ENABLED, QUIET_HOURS_END, QUIET_HOURS_START,
     get_alert_thresholds,
@@ -57,10 +57,6 @@ def _is_quiet_time(now: datetime | None = None) -> bool:
     if start < end:
         return start <= minute < end
     return minute >= start or minute < end
-
-
-def _field_and_mode(spec: str) -> tuple[str, str]:
-    return tuple(spec.split(':', 1)) if ':' in spec else (spec, 'utilization')  # type: ignore[return-value]
 
 
 class AgentPulse:
@@ -118,7 +114,7 @@ class AgentPulse:
                 ),
                 enabled=bool(ON_RESET_COMMAND or ON_THRESHOLD_COMMAND),
             ),
-            pystray.MenuItem(T.get('open_dashboard', 'Open Dashboard'), self.on_open_dashboard),
+            pystray.MenuItem(f"{T.get('open_dashboard', 'Open Dashboard')} (localhost:{DASHBOARD_PORT})", self.on_open_dashboard),
             pystray.MenuItem(T['restart'], self.on_restart),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(T['menu_project'], self.on_open_project),
@@ -231,26 +227,13 @@ class AgentPulse:
             self.icon.title = format_tooltip(data, codex or None)
             return
 
-        top_field, top_mode = _field_and_mode(ICON_FIELDS[0])
-        bottom_field, bottom_mode = _field_and_mode(ICON_FIELDS[1])
-        entries = [self._provider_entry(data, top_field), self._provider_entry(data, bottom_field)]
+        entries = [self._provider_entry(data, 'five_hour')]
         if codex_available:
-            for index, field in enumerate((top_field, bottom_field)):
-                candidate = self._provider_entry(codex, field)
-                if (candidate.get('utilization', 0) or 0) > (entries[index].get('utilization', 0) or 0):
-                    entries[index] = candidate
+            candidate = self._provider_entry(codex, 'five_hour')
+            if (candidate.get('utilization', 0) or 0) > (entries[0].get('utilization', 0) or 0):
+                entries[0] = candidate
 
-        top_pct = entries[0].get('utilization', 0) or 0
-        bottom_pct = entries[1].get('utilization', 0) or 0
-        top_period = field_period(top_field)
-        bottom_period = field_period(bottom_field)
-        top_time = elapsed_pct(entries[0].get('resets_at', ''), top_period) if top_mode == 'overage' and top_period else None
-        bottom_time = elapsed_pct(entries[1].get('resets_at', ''), bottom_period) if bottom_mode == 'overage' and bottom_period else None
-        self.icon.icon = create_icon_image(
-            top_pct, bottom_pct, self._light_taskbar,
-            mode_top=top_mode, mode_bottom=bottom_mode,
-            time_pct_top=top_time, time_pct_bottom=bottom_time,
-        )
+        self.icon.icon = create_icon_image(entries[0].get('utilization', 0) or 0, light_taskbar=self._light_taskbar)
         self.icon.title = format_tooltip(data, codex if codex else None)
 
     def _on_theme_changed(self) -> None:

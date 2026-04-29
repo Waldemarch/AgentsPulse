@@ -13,7 +13,7 @@ Save the following as `check-update.ps1` next to your `AgentsPulse.exe` (or in t
 ```powershell
 $currentVersion = if ($env:USAGE_MONITOR_VERSION) { $env:USAGE_MONITOR_VERSION } else { '0.0.0' }
 
-$releaseUrl = 'https://api.github.com/repos/Waldemarch/usage-monitor-for-claude-and-codex/releases/latest'
+$releaseUrl = 'https://api.github.com/repos/Waldemarch/AgentsPulse/releases/latest'
 
 try {
     $release = Invoke-RestMethod -Uri $releaseUrl -TimeoutSec 10
@@ -84,7 +84,7 @@ Use the **Restart** option in the tray context menu to load the new settings.
 ## How it works
 
 1. On each configured event, the app launches the script as a background process (no console window, no focus stealing)
-2. The script sends a single HTTPS request to `https://api.github.com/repos/Waldemarch/usage-monitor-for-claude-and-codex/releases/latest`
+2. The script sends a single HTTPS request to `https://api.github.com/repos/Waldemarch/AgentsPulse/releases/latest`
 3. If the latest release tag is newer than `USAGE_MONITOR_VERSION`, a toast notification appears
 4. Clicking the notification opens the GitHub release page in your default browser
 5. If the request fails (no internet, API down, rate-limited), the script exits silently

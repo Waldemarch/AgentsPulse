@@ -204,153 +204,52 @@ class TestCreateIconImage(unittest.TestCase):
         self.assertEqual(img_light.size, (64, 64))
         self.assertNotEqual(img_dark.tobytes(), img_light.tobytes())
 
-    def test_zero_usage_no_bar_fill(self):
-        """Zero usage has no filled bar pixels beyond the half-tone background."""
+    def test_zero_usage_renders_percent_text(self):
+        """Zero usage renders a percent icon."""
         img = tray_icon_mod.create_icon_image(0, 0)
 
         self.assertEqual(img.size, (64, 64))
 
-    def test_full_bar_fill_at_100_percent(self):
-        """100% usage fills the entire bar width."""
+    def test_100_percent_differs_from_zero_percent(self):
+        """100% usage renders different text from 0%."""
         img_full = tray_icon_mod.create_icon_image(100, 100)
         img_zero = tray_icon_mod.create_icon_image(0, 0)
 
-        # The bar area pixels should differ between 0% and 100%
         self.assertNotEqual(img_full.tobytes(), img_zero.tobytes())
 
     def test_boundary_50_differs_from_51(self):
-        """50% and 51% produce different icons (text mode switch)."""
+        """50% and 51% produce different percent text."""
         img_50 = tray_icon_mod.create_icon_image(50, 0)
         img_51 = tray_icon_mod.create_icon_image(51, 0)
 
         self.assertNotEqual(img_50.tobytes(), img_51.tobytes())
 
     @patch.object(tray_icon_mod, 'load_font')
-    def test_low_usage_calls_font_size_42(self, mock_font):
-        """Usage <= 50% requests size 42 font for 'C' letter."""
+    def test_low_usage_calls_percent_font_sizes(self, mock_font):
+        """Usage rendering tries the percent font sizes."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(30, 20)
 
-        mock_font.assert_any_call(42)
+        mock_font.assert_any_call(31)
 
     @patch.object(tray_icon_mod, 'load_font')
-    def test_high_usage_calls_font_size_40(self, mock_font):
-        """Usage > 50% requests size 40 font for percentage."""
+    def test_high_usage_calls_percent_font_sizes(self, mock_font):
+        """High usage uses the same percent-only renderer."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(75, 20)
 
-        mock_font.assert_any_call(40)
+        mock_font.assert_any_call(31)
 
     @patch.object(tray_icon_mod, 'load_font')
-    def test_full_usage_calls_symbol_font(self, mock_font):
-        """Usage >= 100% requests size 36 symbol font for cross."""
+    def test_full_usage_does_not_use_symbol_font(self, mock_font):
+        """Full usage is still rendered as a percent, not a cross."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(100, 20)
 
-        mock_font.assert_any_call(36, symbol=True)
-
-
-class TestCreateIconImageOverageMode(unittest.TestCase):
-    """Tests for create_icon_image() overage-mode bars.
-
-    Overage mode shows how far usage has gone into the over-budget zone.
-    The bar is empty when pct <= time_pct (on pace or ahead), and full when
-    pct reaches 100%. Formula: fill_ratio = clamp((pct - time_pct) / (100 - time_pct), 0, 1)
-    """
-
-    def setUp(self):
-        tray_icon_mod.load_font.cache_clear()
-
-    def tearDown(self):
-        tray_icon_mod.load_font.cache_clear()
-
-    def test_overage_mode_returns_64x64_rgba(self):
-        """Overage mode still produces a 64x64 RGBA image."""
-        img = tray_icon_mod.create_icon_image(80, 80, mode_top='overage', mode_bottom='overage', time_pct_top=60, time_pct_bottom=60)
-
-        self.assertEqual(img.size, (64, 64))
-        self.assertEqual(img.mode, 'RGBA')
-
-    def test_overage_mode_time_pct_at_100_falls_back_to_utilization(self):
-        """time_pct=100 (period over) falls back to normal utilization display."""
-        img_fallback = tray_icon_mod.create_icon_image(50, 50, mode_top='overage', mode_bottom='overage', time_pct_top=100, time_pct_bottom=100)
-        img_util = tray_icon_mod.create_icon_image(50, 50)
-
-        self.assertEqual(img_fallback.tobytes(), img_util.tobytes())
-
-    def test_on_pace_produces_empty_bar(self):
-        """Usage exactly at time_pct means on pace - bar pixels are not fully opaque (no fill)."""
-        # pct=60, time_pct=60 -> overage=0 -> fill_ratio=0 -> no fill
-        img = tray_icon_mod.create_icon_image(60, 60, mode_top='overage', mode_bottom='overage', time_pct_top=60, time_pct_bottom=60)
-
-        S = 64
-        bar_h = 9
-        gap = 3
-        bar2_y = S - bar_h
-        bar1_y = bar2_y - gap - bar_h
-        pixels = img.load()
-        for bar_y in (bar1_y, bar2_y):
-            mid_y = bar_y + bar_h // 2
-            # No pixel in the bar should be fully opaque (fill_w=0)
-            self.assertNotEqual(pixels[0, mid_y][3], 255, f'Expected no fill at x=0, y={mid_y}')
-
-    def test_below_pace_produces_empty_bar(self):
-        """Usage below time_pct (ahead of schedule) also produces an empty bar."""
-        # pct=40 < time_pct=60 -> overage=0 -> no fill; same result as pct=60
-        S = 64
-        bar_h = 9
-        gap = 3
-        bar2_y = S - bar_h
-        bar1_y = bar2_y - gap - bar_h
-
-        img_ahead = tray_icon_mod.create_icon_image(40, 40, mode_top='overage', mode_bottom='overage', time_pct_top=60, time_pct_bottom=60)
-        pixels = img_ahead.load()
-        for bar_y in (bar1_y, bar2_y):
-            mid_y = bar_y + bar_h // 2
-            self.assertNotEqual(pixels[0, mid_y][3], 255, f'Expected no fill at x=0, y={mid_y}')
-
-    def test_half_fill_at_midpoint_of_over_budget_range(self):
-        """pct halfway between time_pct and 100% produces a half-filled bar."""
-        # time_pct=60, pct=80 -> (80-60)/(100-60) = 0.5 -> fill_w = 32px
-        img = tray_icon_mod.create_icon_image(80, 80, mode_top='overage', mode_bottom='overage', time_pct_top=60, time_pct_bottom=60)
-
-        S = 64
-        bar_h = 9
-        gap = 3
-        bar2_y = S - bar_h
-        bar1_y = bar2_y - gap - bar_h
-        pixels = img.load()
-        for bar_y in (bar1_y, bar2_y):
-            mid_y = bar_y + bar_h // 2
-            # x=31 (last pixel of left half) should be filled (fg, alpha=255)
-            self.assertEqual(pixels[31, mid_y][3], 255, f'Expected filled pixel at x=31, y={mid_y}')
-            # x=32 (first pixel of right half) should not be filled (bg, alpha<255)
-            self.assertNotEqual(pixels[32, mid_y][3], 255, f'Expected unfilled pixel at x=32, y={mid_y}')
-
-    def test_full_bar_at_100_percent_usage(self):
-        """100% usage fills the entire bar regardless of time_pct."""
-        # time_pct=60, pct=100 -> (100-60)/(100-60) = 1.0 -> full bar
-        img = tray_icon_mod.create_icon_image(100, 100, mode_top='overage', mode_bottom='overage', time_pct_top=60, time_pct_bottom=60)
-
-        S = 64
-        bar_h = 9
-        gap = 3
-        bar2_y = S - bar_h
-        bar1_y = bar2_y - gap - bar_h
-        pixels = img.load()
-        for bar_y in (bar1_y, bar2_y):
-            mid_y = bar_y + bar_h // 2
-            self.assertEqual(pixels[S - 1, mid_y][3], 255, f'Expected fully filled bar at y={mid_y}')
-
-    def test_mixed_modes_top_overage_bottom_utilization(self):
-        """Top bar in overage mode, bottom bar in utilization mode produces valid image."""
-        img = tray_icon_mod.create_icon_image(80, 50, mode_top='overage', mode_bottom='utilization', time_pct_top=60, time_pct_bottom=None)
-
-        self.assertEqual(img.size, (64, 64))
-        self.assertEqual(img.mode, 'RGBA')
+        self.assertFalse(any(call.kwargs.get('symbol') for call in mock_font.call_args_list))
 
 
 class TestCreateStatusImage(unittest.TestCase):

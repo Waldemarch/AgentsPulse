@@ -344,7 +344,7 @@ MAX_BACKOFF = _S.get('max_backoff', 900)
 IDLE_PAUSE = _S.get('idle_pause', 300)
 
 DASHBOARD_HOST = '127.0.0.1'
-DASHBOARD_PORT = 8765
+DASHBOARD_PORT = 8766
 PREDICTION_ENABLED = _S.get('prediction_enabled', True)
 PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
 HEATMAP_ENABLED = _S.get('heatmap_enabled', True)

@@ -161,7 +161,16 @@ class DashboardServer:
             dashboard_app = app
             dashboard_history = history
 
-        self._httpd = ThreadingHTTPServer((self.host, self.port), Handler)
+        last_error: OSError | None = None
+        ports = [0] if self.port == 0 else range(self.port, min(self.port + 20, 65536))
+        for port in ports:
+            try:
+                self._httpd = ThreadingHTTPServer((self.host, port), Handler)
+                break
+            except OSError as exc:
+                last_error = exc
+        if self._httpd is None:
+            raise last_error or OSError(f'Could not start dashboard on {self.host}:{self.port}')
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
         return self.url

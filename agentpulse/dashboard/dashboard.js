@@ -32,7 +32,6 @@ async function loadSettings() {
     const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
     const s = data.settings || {};
     document.getElementById('codexEnabled').checked = !!s.codex_enabled;
-    document.getElementById('iconFields').value = (s.icon_fields || []).join(', ');
     document.getElementById('tooltipFields').value = (s.tooltip_fields || []).join(', ');
     document.getElementById('thresholdClaude5h').value = (s.alert_thresholds_five_hour || []).join(', ');
     document.getElementById('thresholdClaude7d').value = (s.alert_thresholds_seven_day || []).join(', ');
@@ -373,7 +372,6 @@ document.getElementById('settingsForm').addEventListener('submit', async (event)
     event.preventDefault();
     const payload = {
         codex_enabled: document.getElementById('codexEnabled').checked,
-        icon_fields: parseList(document.getElementById('iconFields').value),
         tooltip_fields: parseList(document.getElementById('tooltipFields').value),
         alert_thresholds_five_hour: parseNumbers(document.getElementById('thresholdClaude5h').value),
         alert_thresholds_seven_day: parseNumbers(document.getElementById('thresholdClaude7d').value),

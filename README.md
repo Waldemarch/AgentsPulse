@@ -11,7 +11,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Daily visible value
 
-- **Live tray icon** - two progress bars in your taskbar show session (5h) and weekly (7d) usage at a glance. The bars update every few minutes and adapt to your taskbar's light or dark theme.
+- **Live tray icon** - a compact percent readout in your taskbar shows current session (5h) usage at a glance. It updates every few minutes and adapts to your taskbar's light or dark theme.
 - **Detail popup** - left-click the icon to see a full breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
@@ -23,7 +23,6 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Visual quality
 
-- **Time marker** - a thin line on each usage bar marks how far through the quota period you are right now, so you can see at a glance whether usage is ahead of or behind a healthy pace.
 - **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. The dashboard also has a settings panel for configuring alerts and display options.
 
 ### Reliability
@@ -45,7 +44,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ## Installation
 
-1. Download `AgentsPulse.exe` from the [latest release](https://github.com/Waldemarch/usage-monitor-for-claude-and-codex/releases/latest).
+1. Download `AgentsPulse.exe` from the [latest release](https://github.com/Waldemarch/AgentsPulse/releases/latest).
 2. Place it anywhere you like (next to your projects, in a tools folder, etc.).
 3. Double-click to run. The tray icon appears immediately.
 
@@ -55,7 +54,7 @@ No installer, no admin rights required. To start with Windows, right-click the t
 
 1. Log in to Claude Code if you haven't already (`claude login`).
 2. Run `AgentsPulse.exe`.
-3. The tray icon shows two progress bars - hover for a quick summary, left-click for the full popup.
+3. The tray icon shows the current 5-hour session usage percent - hover for a quick summary, left-click for the full popup.
 4. To open the dashboard, right-click the tray icon and choose **Open Dashboard**.
 
 ## Configuration
@@ -82,8 +81,8 @@ See [docs/configuration.md](docs/configuration.md) for the full list of availabl
 ## Running from source
 
 ```bash
-git clone https://github.com/Waldemarch/usage-monitor-for-claude-and-codex.git
-cd usage-monitor-for-claude-and-codex
+git clone https://github.com/Waldemarch/AgentsPulse.git
+cd AgentsPulse
 python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
 python -m agentpulse

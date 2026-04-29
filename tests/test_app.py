@@ -931,7 +931,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day': {'utilization': 10.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(42.0, 10.0, False, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(42.0, light_taskbar=False)
         self.assertEqual(self.app.icon.title, 'Usage: 42%')
 
     @patch('agentpulse.app.format_tooltip', return_value='Error')
@@ -959,83 +959,50 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {}, 'seven_day': {'utilization': None}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, 0, False, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
-    def test_custom_icon_fields(self, mock_icon, _tooltip):
-        """Custom icon_fields setting changes which fields are shown in the icon."""
+    def test_custom_icon_fields_do_not_change_tray_percent(self, mock_icon, _tooltip):
+        """Tray icon always shows the five-hour session usage."""
         self.app._last_response = {
             'five_hour': {'utilization': 30.0},
             'seven_day_sonnet': {'utilization': 75.0},
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(75.0, 30.0, False, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(30.0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['unknown_field', 'five_hour'])
-    def test_icon_fields_missing_from_response_defaults_to_zero(self, mock_icon, _tooltip):
-        """Icon field not present in API response defaults to 0%."""
-        self.app._last_response = {'five_hour': {'utilization': 42.0}}
+    def test_five_hour_missing_from_response_defaults_to_zero(self, mock_icon, _tooltip):
+        """Missing five-hour usage defaults to 0%."""
+        self.app._last_response = {'seven_day': {'utilization': 42.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, 42.0, False, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
-    def test_icon_fields_null_in_response_defaults_to_zero(self, mock_icon, _tooltip):
-        """Icon field present but null in API response defaults to 0%."""
+    def test_non_five_hour_null_in_response_is_ignored(self, mock_icon, _tooltip):
+        """Only five-hour usage is used for the tray icon."""
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day_sonnet': None}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, 42.0, False, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(42.0, light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.elapsed_pct', return_value=40.0)
-    @patch('agentpulse.app.ICON_FIELDS', ['five_hour:overage', 'seven_day'])
-    def test_overage_mode_passes_time_pct(self, mock_elapsed, mock_icon, _tooltip):
-        """Overage mode passes elapsed time pct to create_icon_image for the top bar."""
-        self.app._last_response = {
-            'five_hour': {'utilization': 60.0, 'resets_at': '2025-01-15T18:00:00Z'},
-            'seven_day': {'utilization': 20.0},
-        }
+    def test_codex_five_hour_can_drive_tray_percent(self, mock_icon, _tooltip):
+        """Codex five-hour usage is shown when it is higher than Claude."""
+        self.app._last_response = {'five_hour': {'utilization': 55.0}}
+        self.app._last_codex_response = {'five_hour': {'utilization': 70.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(60.0, 20.0, False, mode_top='overage', mode_bottom='utilization', time_pct_top=40.0, time_pct_bottom=None)
-
-    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
-    @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.elapsed_pct', return_value=50.0)
-    @patch('agentpulse.app.ICON_FIELDS', ['five_hour:overage', 'seven_day:overage'])
-    def test_both_overage_mode_passes_both_time_pcts(self, mock_elapsed, mock_icon, _tooltip):
-        """Both bars in overage mode pass elapsed time pct for both top and bottom."""
-        self.app._last_response = {
-            'five_hour': {'utilization': 30.0, 'resets_at': '2025-01-15T18:00:00Z'},
-            'seven_day': {'utilization': 10.0, 'resets_at': '2025-01-20T00:00:00Z'},
-        }
-        self.app._render_tray()
-
-        mock_icon.assert_called_once_with(30.0, 10.0, False, mode_top='overage', mode_bottom='overage', time_pct_top=50.0, time_pct_bottom=50.0)
-
-    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
-    @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.ICON_FIELDS', ['five_hour:overage', 'seven_day'])
-    def test_overage_mode_field_parsed_as_dict_key(self, mock_icon, _tooltip):
-        """Field name in overage mode is correctly stripped of mode suffix for data lookup."""
-        self.app._last_response = {
-            'five_hour': {'utilization': 55.0, 'resets_at': '2025-01-15T18:00:00Z'},
-            'seven_day': {'utilization': 25.0},
-        }
-        self.app._render_tray()
-
-        # pct_top should be 55.0 (not 0), confirming 'five_hour' was used as dict key not 'five_hour:overage'
-        call_args = mock_icon.call_args
-        self.assertEqual(call_args[0][0], 55.0)
+        mock_icon.assert_called_once_with(70.0, light_taskbar=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1062,7 +1029,7 @@ class TestOnThemeChanged(unittest.TestCase):
         self.app._on_theme_changed()
 
         self.assertTrue(self.app._light_taskbar)
-        mock_icon.assert_called_once_with(50.0, 20.0, True, mode_top='utilization', mode_bottom='utilization', time_pct_top=None, time_pct_bottom=None)
+        mock_icon.assert_called_once_with(50.0, light_taskbar=True)
 
     @patch('agentpulse.app.taskbar_uses_light_theme', return_value=False)
     def test_same_theme_no_render(self, _theme):
