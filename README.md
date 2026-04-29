@@ -11,7 +11,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Daily visible value
 
-- **Live tray icon** - a compact percent readout in your taskbar shows current session (5h) usage at a glance. It updates every few minutes and adapts to your taskbar's light or dark theme.
+- **Live tray icon** - a compact `AP` mark sits in your taskbar and adapts to your taskbar's light or dark theme.
 - **Detail popup** - left-click the icon to see a full breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
@@ -54,7 +54,7 @@ No installer, no admin rights required. To start with Windows, right-click the t
 
 1. Log in to Claude Code if you haven't already (`claude login`).
 2. Run `AgentsPulse.exe`.
-3. The tray icon shows the current 5-hour session usage percent - hover for a quick summary, left-click for the full popup.
+3. Hover over the `AP` tray icon for a quick summary, or left-click for the full popup.
 4. To open the dashboard, right-click the tray icon and choose **Open Dashboard**.
 
 ## Configuration

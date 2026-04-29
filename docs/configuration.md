@@ -91,7 +91,7 @@ Must be an array of non-empty strings. `"*"` may appear at most once. Duplicates
 
 ## Tray icon
 
-The tray icon displays the current session (5h) usage as a compact percentage. It always uses the `five_hour` API field; use `tooltip_fields` to choose which fields appear when hovering over the icon.
+The tray icon displays a compact `AP` mark. Use `tooltip_fields` to choose which usage fields appear when hovering over the icon.
 
 ## Event commands
 

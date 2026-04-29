@@ -204,47 +204,47 @@ class TestCreateIconImage(unittest.TestCase):
         self.assertEqual(img_light.size, (64, 64))
         self.assertNotEqual(img_dark.tobytes(), img_light.tobytes())
 
-    def test_zero_usage_renders_percent_text(self):
-        """Zero usage renders a percent icon."""
+    def test_zero_usage_renders_initials(self):
+        """Zero usage still renders the AP icon."""
         img = tray_icon_mod.create_icon_image(0, 0)
 
         self.assertEqual(img.size, (64, 64))
 
-    def test_100_percent_differs_from_zero_percent(self):
-        """100% usage renders different text from 0%."""
+    def test_usage_percent_does_not_change_icon(self):
+        """Usage percent no longer changes the AP icon."""
         img_full = tray_icon_mod.create_icon_image(100, 100)
         img_zero = tray_icon_mod.create_icon_image(0, 0)
 
-        self.assertNotEqual(img_full.tobytes(), img_zero.tobytes())
+        self.assertEqual(img_full.tobytes(), img_zero.tobytes())
 
-    def test_boundary_50_differs_from_51(self):
-        """50% and 51% produce different percent text."""
+    def test_boundary_50_matches_51(self):
+        """Different usage values produce the same AP icon."""
         img_50 = tray_icon_mod.create_icon_image(50, 0)
         img_51 = tray_icon_mod.create_icon_image(51, 0)
 
-        self.assertNotEqual(img_50.tobytes(), img_51.tobytes())
+        self.assertEqual(img_50.tobytes(), img_51.tobytes())
 
     @patch.object(tray_icon_mod, 'load_font')
-    def test_low_usage_calls_percent_font_sizes(self, mock_font):
-        """Usage rendering tries the percent font sizes."""
+    def test_low_usage_calls_initials_font_size(self, mock_font):
+        """Usage rendering tries the AP font size."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(30, 20)
 
-        mock_font.assert_any_call(31)
+        mock_font.assert_any_call(34)
 
     @patch.object(tray_icon_mod, 'load_font')
-    def test_high_usage_calls_percent_font_sizes(self, mock_font):
-        """High usage uses the same percent-only renderer."""
+    def test_high_usage_calls_initials_font_size(self, mock_font):
+        """High usage uses the same AP renderer."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(75, 20)
 
-        mock_font.assert_any_call(31)
+        mock_font.assert_any_call(34)
 
     @patch.object(tray_icon_mod, 'load_font')
     def test_full_usage_does_not_use_symbol_font(self, mock_font):
-        """Full usage is still rendered as a percent, not a cross."""
+        """Full usage is still rendered as AP, not a cross."""
         mock_font.return_value = _real_font()
 
         tray_icon_mod.create_icon_image(100, 20)

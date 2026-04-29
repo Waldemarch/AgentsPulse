@@ -68,18 +68,13 @@ def _fit_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, y
     draw.text(((_SIZE - width) / 2 - box[0], y - box[1]), text, fill=color, font=font, stroke_width=stroke, stroke_fill=color)
 
 
-def _percent_text(pct: float) -> str:
-    pct = max(0.0, min(999.0, pct))
-    return f'{pct:.0f}%'
-
-
-def _percent_font(draw: ImageDraw.ImageDraw, text: str) -> ImageFont.ImageFont:
-    for size in (31, 29, 27, 25, 23, 21):
+def _icon_font(draw: ImageDraw.ImageDraw, text: str) -> ImageFont.ImageFont:
+    for size in (34, 32, 30, 28, 26, 24):
         font = load_font(size)
         box = draw.textbbox((0, 0), text, font=font)
         if box[2] - box[0] <= _SIZE - 2 and box[3] - box[1] <= _SIZE - 2:
             return font
-    return load_font(20)
+    return load_font(22)
 
 
 def create_icon_image(
@@ -92,13 +87,13 @@ def create_icon_image(
     time_pct_top: float | None = None,
     time_pct_bottom: float | None = None,
 ) -> Image.Image:
-    """Create a 64px RGBA icon showing the 5-hour session usage percent."""
+    """Create a 64px RGBA icon with the Agents Pulse initials."""
     colors = _palette(light_taskbar)
     image = Image.new('RGBA', (_SIZE, _SIZE), _CLEAR)
     draw = ImageDraw.Draw(image)
 
-    text = _percent_text(pct_top)
-    font = _percent_font(draw, text)
+    text = 'AP'
+    font = _icon_font(draw, text)
     box = draw.textbbox((0, 0), text, font=font)
     y = (_SIZE - (box[3] - box[1])) / 2 - box[1]
     _fit_text(draw, text, font, int(y), colors['fg'])
