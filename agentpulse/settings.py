@@ -402,8 +402,8 @@ LANGUAGE = _S.get('language', '')
 ON_RESET_COMMAND = _S.get('on_reset_command', [])
 ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
 CODEX_ENABLED = _S.get('codex_enabled', True)
-SHOW_INSTALL_SECTION = _S.get('show_install_section', True)
-EMAIL_DISPLAY = _S.get('email_display', 'show')
+SHOW_INSTALL_SECTION = _S.get('show_install_section', False)
+EMAIL_DISPLAY = _S.get('email_display', 'blur')
 
 _ALERT_THRESHOLDS: dict[str, list[float]] = {
     'five_hour': [50, 80, 95],
@@ -470,5 +470,5 @@ def reload() -> None:
     TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
     ALERT_TIME_AWARE = _S.get('alert_time_aware', True)
     ALERT_TIME_AWARE_BELOW = _S.get('alert_time_aware_below', 90)
-    SHOW_INSTALL_SECTION = _S.get('show_install_section', True)
-    EMAIL_DISPLAY = _S.get('email_display', 'show')
+    SHOW_INSTALL_SECTION = _S.get('show_install_section', False)
+    EMAIL_DISPLAY = _S.get('email_display', 'blur')
