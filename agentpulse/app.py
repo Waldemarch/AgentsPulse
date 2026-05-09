@@ -25,10 +25,10 @@ from .formatting import elapsed_pct, field_period, format_credits, format_toolti
 from .i18n import T
 from .idle import get_idle_seconds, is_workstation_locked
 from .popup import UsagePopup
+from . import settings as _settings
 from .settings import (
-    ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, DASHBOARD_PORT, ICON_FIELDS, IDLE_PAUSE,
-    ON_RESET_COMMAND, ON_THRESHOLD_COMMAND, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA,
-    POLL_INTERVAL, QUIET_HOURS_ENABLED, QUIET_HOURS_END, QUIET_HOURS_START,
+    ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
+    POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
     get_alert_thresholds,
 )
 from .tray_icon import create_icon_image, create_status_image, taskbar_uses_light_theme, watch_theme_change
@@ -46,11 +46,11 @@ def _minutes_from_hhmm(value: str) -> int:
 
 
 def _is_quiet_time(now: datetime | None = None) -> bool:
-    if not QUIET_HOURS_ENABLED:
+    if not _settings.QUIET_HOURS_ENABLED:
         return False
     current = now or datetime.now().astimezone()
-    start = _minutes_from_hhmm(QUIET_HOURS_START)
-    end = _minutes_from_hhmm(QUIET_HOURS_END)
+    start = _minutes_from_hhmm(_settings.QUIET_HOURS_START)
+    end = _minutes_from_hhmm(_settings.QUIET_HOURS_END)
     minute = current.hour * 60 + current.minute
     if start == end:
         return True
@@ -107,12 +107,12 @@ class AgentPulse:
             pystray.MenuItem(
                 T['test_commands'],
                 pystray.Menu(
-                    pystray.MenuItem(T['test_reset_5h'], self.on_test_reset_5h, enabled=bool(ON_RESET_COMMAND)),
-                    pystray.MenuItem(T['test_reset_7d'], self.on_test_reset_7d, enabled=bool(ON_RESET_COMMAND)),
-                    pystray.MenuItem(T['test_threshold_5h'], self.on_test_threshold_5h, enabled=bool(ON_THRESHOLD_COMMAND)),
-                    pystray.MenuItem(T['test_threshold_7d'], self.on_test_threshold_7d, enabled=bool(ON_THRESHOLD_COMMAND)),
+                    pystray.MenuItem(T['test_reset_5h'], self.on_test_reset_5h, enabled=bool(_settings.ON_RESET_COMMAND)),
+                    pystray.MenuItem(T['test_reset_7d'], self.on_test_reset_7d, enabled=bool(_settings.ON_RESET_COMMAND)),
+                    pystray.MenuItem(T['test_threshold_5h'], self.on_test_threshold_5h, enabled=bool(_settings.ON_THRESHOLD_COMMAND)),
+                    pystray.MenuItem(T['test_threshold_7d'], self.on_test_threshold_7d, enabled=bool(_settings.ON_THRESHOLD_COMMAND)),
                 ),
-                enabled=bool(ON_RESET_COMMAND or ON_THRESHOLD_COMMAND),
+                enabled=bool(_settings.ON_RESET_COMMAND or _settings.ON_THRESHOLD_COMMAND),
             ),
             pystray.MenuItem(f"{T.get('open_dashboard', 'Open Dashboard')} (localhost:{DASHBOARD_PORT})", self.on_open_dashboard),
             pystray.MenuItem(T['restart'], self.on_restart),
@@ -165,24 +165,24 @@ class AgentPulse:
     def on_test_reset_5h(self, icon: Any = None, item: Any = None) -> None:
         env = self._test_env('reset', 'five_hour', '0', prev='95', resets_at=_future_iso(hours=5))
         env.update({'USAGE_MONITOR_TITLE': T['notify_reset_title'], 'USAGE_MONITOR_MESSAGE': T['notify_reset']})
-        run_event_command(ON_RESET_COMMAND, env)
+        run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def on_test_reset_7d(self, icon: Any = None, item: Any = None) -> None:
         env = self._test_env('reset', 'seven_day', '0', prev='99', resets_at=_future_iso(days=7))
         env.update({'USAGE_MONITOR_TITLE': T['notify_reset_title'], 'USAGE_MONITOR_MESSAGE': T['notify_reset']})
-        run_event_command(ON_RESET_COMMAND, env)
+        run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def on_test_threshold_5h(self, icon: Any = None, item: Any = None) -> None:
         message = T['notify_threshold_generic'].format(label=popup_label('five_hour'), pct='82')
         env = self._test_env('threshold', 'five_hour', '82', threshold='80', resets_at=_future_iso(hours=3))
         env.update({'USAGE_MONITOR_TITLE': T['notify_threshold_title'], 'USAGE_MONITOR_MESSAGE': message})
-        run_event_command(ON_THRESHOLD_COMMAND, env)
+        run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
     def on_test_threshold_7d(self, icon: Any = None, item: Any = None) -> None:
         message = T['notify_threshold_generic'].format(label=popup_label('seven_day'), pct='81')
         env = self._test_env('threshold', 'seven_day', '81', threshold='80', resets_at=_future_iso(days=4))
         env.update({'USAGE_MONITOR_TITLE': T['notify_threshold_title'], 'USAGE_MONITOR_MESSAGE': message})
-        run_event_command(ON_THRESHOLD_COMMAND, env)
+        run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
     def _open_popup(self) -> None:
         try:
@@ -262,7 +262,7 @@ class AgentPulse:
         if self._account_changed():
             return
         fields = self._process_provider_alerts('claude', result.data)
-        top_key = ICON_FIELDS[0].split(':', 1)[0]
+        top_key = _settings.ICON_FIELDS[0].split(':', 1)[0]
         previous = self._prev_utilization.get(top_key)
         if previous is not None and fields.get(top_key, 0) > previous:
             self._fast_polls_remaining = POLL_FAST_EXTRA + 1
@@ -401,7 +401,7 @@ class AgentPulse:
         entry: dict[str, Any],
         provider: str = 'claude',
     ) -> None:
-        if not ON_RESET_COMMAND:
+        if not _settings.ON_RESET_COMMAND:
             return
         five = (data.get('five_hour') or {}).get('utilization', 0) or 0
         seven = (data.get('seven_day') or {}).get('utilization', 0) or 0
@@ -426,7 +426,7 @@ class AgentPulse:
             'USAGE_MONITOR_TITLE': T['notify_reset_title'],
             'USAGE_MONITOR_MESSAGE': T['notify_reset'],
         }
-        run_event_command(ON_RESET_COMMAND, env)
+        run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def _run_threshold_command(
         self,
@@ -441,7 +441,7 @@ class AgentPulse:
         extra_limit: str = '',
         provider: str = 'claude',
     ) -> None:
-        if not ON_THRESHOLD_COMMAND or not self._first_update_done:
+        if not _settings.ON_THRESHOLD_COMMAND or not self._first_update_done:
             return
         env = {
             'AGENTPULSE_EVENT': 'threshold',
@@ -464,7 +464,7 @@ class AgentPulse:
             env.update({'AGENTPULSE_EXTRA_USED': extra_used, 'USAGE_MONITOR_EXTRA_USED': extra_used})
         if extra_limit:
             env.update({'AGENTPULSE_EXTRA_LIMIT': extra_limit, 'USAGE_MONITOR_EXTRA_LIMIT': extra_limit})
-        run_event_command(ON_THRESHOLD_COMMAND, env)
+        run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
     def _seconds_until_next_reset(self) -> float | None:
         now = datetime.now(timezone.utc)
@@ -535,7 +535,7 @@ class AgentPulse:
                         break
 
     def _reset_deadline(self) -> float | None:
-        if not ON_RESET_COMMAND:
+        if not _settings.ON_RESET_COMMAND:
             return None
         seconds = self._seconds_until_next_reset()
         if seconds is not None:
