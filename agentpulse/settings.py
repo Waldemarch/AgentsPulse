@@ -24,6 +24,7 @@ __all__ = [
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
     'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
     'dashboard_settings', 'get_alert_thresholds', 'reload', 'save_dashboard_settings', 'settings_write_path',
+    'EMAIL_DISPLAY', 'SHOW_INSTALL_SECTION',
 ]
 
 SETTINGS_FILENAME = 'agentpulse-settings.json'
@@ -38,7 +39,8 @@ _MIN_INTS = {
     'idle_pause': 0,
 }
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
-_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled'}
+_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
+_EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
 _TIMES = {'prediction_day_end_time', 'quiet_hours_start', 'quiet_hours_end'}
 _COMMANDS = {'on_reset_command', 'on_threshold_command'}
@@ -52,6 +54,7 @@ _DASHBOARD_KEYS = {
     'on_reset_command', 'on_threshold_command',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
+    'show_install_section', 'email_display',
 }
 
 
@@ -162,6 +165,9 @@ def _validate(data: dict[str, Any], path: Path) -> dict[str, Any]:
         elif key in _TIMES:
             if not _valid_time(value):
                 reject(key, 'expected HH:MM time')
+        elif key == 'email_display':
+            if value not in _EMAIL_DISPLAY_VALUES:
+                reject(key, f'expected one of {_EMAIL_DISPLAY_VALUES}')
         elif key in _BOOLEANS:
             if not isinstance(value, bool):
                 reject(key, f'expected true or false, got {type(value).__name__}')
@@ -287,6 +293,16 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = sorted(set(value))
             else:
                 errors.append(f'{key}: invalid value')
+        elif key == 'show_install_section':
+            if isinstance(value, bool):
+                accepted[key] = value
+            else:
+                errors.append(f'{key}: invalid value')
+        elif key == 'email_display':
+            if value in _EMAIL_DISPLAY_VALUES:
+                accepted[key] = value
+            else:
+                errors.append(f'{key}: invalid value')
         else:
             errors.append(f'{key}: unsupported')
     return accepted, errors
@@ -386,6 +402,8 @@ LANGUAGE = _S.get('language', '')
 ON_RESET_COMMAND = _S.get('on_reset_command', [])
 ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
 CODEX_ENABLED = _S.get('codex_enabled', True)
+SHOW_INSTALL_SECTION = _S.get('show_install_section', True)
+EMAIL_DISPLAY = _S.get('email_display', 'show')
 
 _ALERT_THRESHOLDS: dict[str, list[float]] = {
     'five_hour': [50, 80, 95],
@@ -435,6 +453,7 @@ def reload() -> None:
     global HEATMAP_ENABLED, CODEX_ENABLED
     global ICON_FIELDS, TOOLTIP_FIELDS
     global ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW
+    global SHOW_INSTALL_SECTION, EMAIL_DISPLAY
 
     _S = _load_settings()
 
@@ -451,3 +470,5 @@ def reload() -> None:
     TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
     ALERT_TIME_AWARE = _S.get('alert_time_aware', True)
     ALERT_TIME_AWARE_BELOW = _S.get('alert_time_aware_below', 90)
+    SHOW_INSTALL_SECTION = _S.get('show_install_section', True)
+    EMAIL_DISPLAY = _S.get('email_display', 'show')

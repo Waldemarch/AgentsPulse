@@ -17,11 +17,11 @@ THEME_REG_KEY = r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 THEME_REG_VALUE = 'SystemUsesLightTheme'
 REG_NOTIFY_CHANGE_LAST_SET = 0x00000004
 _SIZE = 64
+_SCALE = 4          # supersampling; draw at _SIZE*_SCALE, then downscale for anti-aliasing
 _CLEAR = (0, 0, 0, 0)
-_TRACK = (98, 104, 112, 95)
-_CLAUDE = (237, 129, 92, 255)
-_CODEX = (82, 148, 255, 255)
-_WARN = (230, 80, 80, 255)
+_RING_NORMAL = (74, 158, 255, 255)   # blue  — normal usage
+_RING_WARN   = (224, 128, 30, 255)   # orange — usage ≥ 80 %
+_RING_CRIT   = (230, 80, 80, 255)    # red   — usage ≥ 95 %
 
 
 @functools.lru_cache(maxsize=None)
@@ -66,43 +66,49 @@ def _palette(light_taskbar: bool) -> dict[str, tuple[int, int, int, int]]:
     return ICON_DARK if light_taskbar else ICON_LIGHT
 
 
-def _usage_color(pct: float, base: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+def _ring_color(pct: float) -> tuple[int, int, int, int]:
     if pct >= 95:
-        return _WARN
-    return base
+        return _RING_CRIT
+    if pct >= 80:
+        return _RING_WARN
+    return _RING_NORMAL
 
 
-def _draw_usage_row(
+def _track_rgba(light_taskbar: bool) -> tuple[int, int, int, int]:
+    """Semi-transparent ring track that works on both light and dark taskbars."""
+    return (0, 0, 0, 70) if light_taskbar else (255, 255, 255, 55)
+
+
+def _draw_ring(
     draw: ImageDraw.ImageDraw,
-    label: str,
+    bbox: list[int],
     pct: float,
-    y: int,
-    base_color: tuple[int, int, int, int],
-    text_color: tuple[int, int, int, int],
+    ring_width: int,
+    track: tuple[int, int, int, int],
 ) -> None:
+    """Draw a single circular progress ring.
+
+    A full ring represents 0 % usage.  As pct increases the ring is erased
+    counter-clockwise starting from 12 o'clock, leaving only the remaining
+    capacity visible.  At 100 % only the grey track is shown.
+    """
     pct = max(0.0, min(100.0, pct))
-    font = load_font(16)
-    draw.text((1, y - 3), label, fill=text_color, font=font)
-
-    left = 16
-    top = y
-    right = 57
-    bottom = y + 17
-    fill_right = left + int((right - left) * pct / 100)
-    color = _usage_color(pct, base_color)
-    draw.rounded_rectangle((left, top, right, bottom), radius=3, fill=_TRACK)
-    if pct > 0:
-        draw.rounded_rectangle((left, top, max(left + 2, fill_right), bottom), radius=3, fill=color)
-
-    pct_text = f'{pct:.0f}'
-    pct_font = load_font(12)
-    box = draw.textbbox((0, 0), pct_text, font=pct_font)
-    draw.text((_SIZE - (box[2] - box[0]) - 1, y + 17), pct_text, fill=text_color, font=pct_font)
+    # Grey track — always a complete circle
+    draw.arc(bbox, start=0, end=359.9, fill=track, width=ring_width)
+    # Coloured arc = remaining capacity (1 – utilisation)
+    remaining = 1.0 - pct / 100.0
+    if remaining < 0.002:
+        return
+    # Arc starts at 12 o'clock (–90°) and extends clockwise for `remaining * 360°`.
+    # As usage grows, the end angle retreats counter-clockwise, erasing the arc from
+    # the 12 o'clock position going CCW.
+    end_angle = -90.0 + remaining * 360.0
+    draw.arc(bbox, start=-90, end=end_angle, fill=_ring_color(pct), width=ring_width)
 
 
 def create_icon_image(
     pct_top: float,
-    pct_bottom: float = 0,
+    pct_bottom: float | None = None,
     light_taskbar: bool = False,
     *,
     mode_top: str = 'utilization',
@@ -110,18 +116,39 @@ def create_icon_image(
     time_pct_top: float | None = None,
     time_pct_bottom: float | None = None,
 ) -> Image.Image:
-    """Create a 64px RGBA icon with compact Claude and Codex usage rows."""
-    colors = _palette(light_taskbar)
-    image = Image.new('RGBA', (_SIZE, _SIZE), _CLEAR)
-    draw = ImageDraw.Draw(image)
+    """Create a 64 px RGBA tray icon with circular ring(s).
 
-    _draw_usage_row(draw, 'C', pct_top, 5, _CLAUDE, colors['fg'])
-    _draw_usage_row(draw, 'X', pct_bottom, 36, _CODEX, colors['fg'])
-    return image
+    pct_top    — Claude 5 h utilisation; always the outer (or only) ring.
+    pct_bottom — Codex 5 h utilisation; when provided a second, inner ring is
+                 drawn concentrically inside the Claude ring.  Pass ``None``
+                 (the default) to show a single ring.
+    """
+    S = _SIZE * _SCALE          # canvas size at 4× for anti-aliasing
+    img = Image.new('RGBA', (S, S), _CLEAR)
+    draw = ImageDraw.Draw(img)
+    track = _track_rgba(light_taskbar)
+    c = S // 2                  # centre coordinate
+
+    if pct_bottom is not None:
+        # ── Two concentric rings ──────────────────────────────────────────
+        # Outer ring (Claude 5 h)
+        #   arc centre-line radius = 100, ring width = 48
+        #   outer edge ≈ 4 px from image border (at 4×) → 1 px at 64 px
+        _draw_ring(draw, [c - 100, c - 100, c + 100, c + 100], pct_top,    48, track)
+        # Inner ring (Codex 5 h)
+        #   arc centre-line radius = 50, ring width = 40
+        #   ≈ 1.5 px gap between the two rings at 64 px
+        _draw_ring(draw, [c - 50,  c - 50,  c + 50,  c + 50],  pct_bottom, 40, track)
+    else:
+        # ── Single ring ───────────────────────────────────────────────────
+        #   arc centre-line radius = 94, ring width = 60  (≈ 15 px at 64 px)
+        _draw_ring(draw, [c - 94, c - 94, c + 94, c + 94], pct_top, 60, track)
+
+    return img.resize((_SIZE, _SIZE), Image.LANCZOS)
 
 
 def create_status_image(text: str, light_taskbar: bool = False) -> Image.Image:
-    """Create a centered text icon used for non-usage states."""
+    """Create a centered text icon used for non-usage states (e.g. auth error)."""
     image = Image.new('RGBA', (_SIZE, _SIZE), _CLEAR)
     draw = ImageDraw.Draw(image)
     font = load_font(46)
