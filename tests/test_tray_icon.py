@@ -196,7 +196,7 @@ class TestCreateIconImage(unittest.TestCase):
         self.assertEqual(img.size, (64, 64))
 
     def test_dark_and_light_taskbar_produce_different_images(self):
-        """Dark vs light taskbar produces different pixel data."""
+        """Dark vs light taskbar produces different pixel data (different track colours)."""
         img_dark = tray_icon_mod.create_icon_image(50, 50, light_taskbar=False)
         img_light = tray_icon_mod.create_icon_image(50, 50, light_taskbar=True)
 
@@ -204,54 +204,46 @@ class TestCreateIconImage(unittest.TestCase):
         self.assertEqual(img_light.size, (64, 64))
         self.assertNotEqual(img_dark.tobytes(), img_light.tobytes())
 
-    def test_zero_usage_renders_usage_rows(self):
-        """Zero usage still renders the two-row usage icon."""
-        img = tray_icon_mod.create_icon_image(0, 0)
-
+    def test_zero_usage_renders_full_ring(self):
+        """0 % usage renders a full ring (maximum coloured arc)."""
+        img = tray_icon_mod.create_icon_image(0)
         self.assertEqual(img.size, (64, 64))
 
     def test_usage_percent_changes_icon(self):
-        """Usage percent changes the segment fill."""
-        img_full = tray_icon_mod.create_icon_image(100, 100)
-        img_zero = tray_icon_mod.create_icon_image(0, 0)
-
+        """Different usage levels produce visually distinct icons."""
+        img_full = tray_icon_mod.create_icon_image(100)
+        img_zero = tray_icon_mod.create_icon_image(0)
         self.assertNotEqual(img_full.tobytes(), img_zero.tobytes())
 
-    def test_bottom_usage_changes_icon(self):
-        """Bottom-row usage changes the icon independently."""
-        img_low = tray_icon_mod.create_icon_image(50, 0)
-        img_high = tray_icon_mod.create_icon_image(50, 90)
+    def test_single_ring_vs_double_ring_differ(self):
+        """Single-ring icon (pct_bottom=None) differs from two-ring icon."""
+        img_single = tray_icon_mod.create_icon_image(50)
+        img_double = tray_icon_mod.create_icon_image(50, 50)
+        self.assertNotEqual(img_single.tobytes(), img_double.tobytes())
 
+    def test_inner_ring_usage_changes_icon(self):
+        """Codex inner ring usage changes the icon independently."""
+        img_low  = tray_icon_mod.create_icon_image(50, 0)
+        img_high = tray_icon_mod.create_icon_image(50, 90)
         self.assertNotEqual(img_low.tobytes(), img_high.tobytes())
 
-    @patch.object(tray_icon_mod, 'load_font')
-    def test_low_usage_calls_row_font_sizes(self, mock_font):
-        """Usage rendering loads row label and percent fonts."""
-        mock_font.return_value = _real_font()
+    def test_no_font_calls_for_ring_icon(self):
+        """Ring rendering does not call load_font (no text drawn)."""
+        with patch.object(tray_icon_mod, 'load_font') as mock_font:
+            tray_icon_mod.create_icon_image(30, 20)
+            mock_font.assert_not_called()
 
-        tray_icon_mod.create_icon_image(30, 20)
+    def test_warn_threshold_changes_colour(self):
+        """Usage ≥ 80 % produces a different icon colour than usage < 80 %."""
+        img_normal = tray_icon_mod.create_icon_image(79)
+        img_warn   = tray_icon_mod.create_icon_image(80)
+        self.assertNotEqual(img_normal.tobytes(), img_warn.tobytes())
 
-        mock_font.assert_any_call(16)
-        mock_font.assert_any_call(12)
-
-    @patch.object(tray_icon_mod, 'load_font')
-    def test_high_usage_calls_row_font_sizes(self, mock_font):
-        """High usage uses the same two-row renderer."""
-        mock_font.return_value = _real_font()
-
-        tray_icon_mod.create_icon_image(75, 20)
-
-        mock_font.assert_any_call(16)
-        mock_font.assert_any_call(12)
-
-    @patch.object(tray_icon_mod, 'load_font')
-    def test_full_usage_does_not_use_symbol_font(self, mock_font):
-        """Full usage is rendered as segments, not a symbol."""
-        mock_font.return_value = _real_font()
-
-        tray_icon_mod.create_icon_image(100, 20)
-
-        self.assertFalse(any(call.kwargs.get('symbol') for call in mock_font.call_args_list))
+    def test_crit_threshold_changes_colour(self):
+        """Usage ≥ 95 % produces a different icon colour than usage < 95 %."""
+        img_warn = tray_icon_mod.create_icon_image(94)
+        img_crit = tray_icon_mod.create_icon_image(95)
+        self.assertNotEqual(img_warn.tobytes(), img_crit.tobytes())
 
 
 class TestCreateStatusImage(unittest.TestCase):

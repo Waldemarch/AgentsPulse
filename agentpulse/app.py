@@ -228,11 +228,15 @@ class AgentPulse:
             return
 
         claude_session = self._provider_entry(data, 'five_hour')
-        bottom_entry = self._provider_entry(codex, 'five_hour') if codex_available else self._provider_entry(data, 'seven_day')
+        # Inner ring is shown only when Codex data is available; pass None for a
+        # single-ring icon when the user has no Codex session.
+        codex_pct: float | None = (
+            self._provider_entry(codex, 'five_hour').get('utilization', 0) or 0
+        ) if codex_available else None
 
         self.icon.icon = create_icon_image(
             claude_session.get('utilization', 0) or 0,
-            bottom_entry.get('utilization', 0) or 0,
+            codex_pct,
             light_taskbar=self._light_taskbar,
         )
         self.icon.title = format_tooltip(data, codex if codex else None)
