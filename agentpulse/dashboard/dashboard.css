@@ -1,9 +1,47 @@
+:root {
+    --bg: #111318;
+    --bg-card: #1a1d24;
+    --bg-header: #13161d;
+    --border: #252b35;
+    --fg: #e0e4ed;
+    --fg-dim: #7a8494;
+    --fg-heading: #f0f3f8;
+    --warn: #e05050;
+    --btn-bg: #252b35;
+    --btn-color: #e0e4ed;
+    --input-bg: #1a1d24;
+    --input-border: #2e3440;
+    --chart-claude: #4a9eff;
+    --chart-codex: #34c998;
+    --chart-seven: #a78bfa;
+    --chart-warn: #e05050;
+}
+
+[data-theme="light"] {
+    --bg: #f6f7f9;
+    --bg-card: #ffffff;
+    --bg-header: #ffffff;
+    --border: #d9dee7;
+    --fg: #20242a;
+    --fg-dim: #667085;
+    --fg-heading: #111318;
+    --warn: #d64545;
+    --btn-bg: #20242a;
+    --btn-color: #ffffff;
+    --input-bg: #ffffff;
+    --input-border: #c7cfdb;
+    --chart-claude: #1f7aec;
+    --chart-codex: #13a579;
+    --chart-seven: #8b5cf6;
+    --chart-warn: #d64545;
+}
+
 * { box-sizing: border-box; }
 
 body {
     margin: 0;
-    background: #f6f7f9;
-    color: #20242a;
+    background: var(--bg);
+    color: var(--fg);
     font-family: "Segoe UI", system-ui, sans-serif;
     font-size: 14px;
 }
@@ -14,8 +52,8 @@ header {
     gap: 20px;
     align-items: center;
     padding: 22px 28px;
-    background: #ffffff;
-    border-bottom: 1px solid #d9dee7;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
 }
 
 h1, h2, p { margin: 0; }
@@ -24,7 +62,7 @@ h2 { font-size: 16px; }
 
 #subtitle {
     margin-top: 4px;
-    color: #667085;
+    color: var(--fg-dim);
 }
 
 .actions {
@@ -35,16 +73,16 @@ h2 { font-size: 16px; }
 
 select, a {
     height: 32px;
-    border: 1px solid #c7cfdb;
-    background: #fff;
-    color: #20242a;
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--fg);
     border-radius: 6px;
     padding: 0 10px;
     font: inherit;
 }
 
 button, input {
-    border: 1px solid #c7cfdb;
+    border: 1px solid var(--input-border);
     border-radius: 6px;
     font: inherit;
 }
@@ -52,20 +90,34 @@ button, input {
 button {
     height: 34px;
     padding: 0 12px;
-    background: #20242a;
-    color: #fff;
+    background: var(--btn-bg);
+    color: var(--btn-color);
     cursor: pointer;
 }
 
 input {
     min-height: 34px;
     padding: 6px 8px;
+    background: var(--input-bg);
+    color: var(--fg);
 }
 
 a {
     display: inline-flex;
     align-items: center;
     text-decoration: none;
+}
+
+#themeBtn {
+    height: 34px;
+    width: 34px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--input-border);
+    color: var(--fg);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
 }
 
 main {
@@ -78,8 +130,8 @@ main {
 }
 
 section {
-    background: #ffffff;
-    border: 1px solid #d9dee7;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 18px;
 }
@@ -94,8 +146,8 @@ section {
 }
 
 .provider-card {
-    background: #ffffff;
-    border: 1px solid #d9dee7;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 18px;
 }
@@ -108,7 +160,7 @@ section {
 }
 
 .provider-title span, .section-head span, .muted {
-    color: #667085;
+    color: var(--fg-dim);
     font-size: 12px;
 }
 
@@ -124,17 +176,17 @@ section {
 .bar {
     height: 8px;
     margin-top: 7px;
-    background: #e8edf3;
+    background: var(--border);
     overflow: hidden;
 }
 
 .fill {
     height: 100%;
-    background: #1f7aec;
+    background: var(--chart-claude);
     transition: width 0.25s ease;
 }
 
-.fill.warn { background: #d64545; }
+.fill.warn { background: var(--warn); }
 
 canvas {
     width: 100%;
@@ -150,7 +202,7 @@ canvas {
 }
 
 .diag, .prediction {
-    border: 1px solid #e2e7ef;
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;
 }
@@ -173,7 +225,7 @@ canvas {
 }
 
 .prediction.ok strong { color: #0f7a4f; }
-.prediction.warn strong { color: #b42318; }
+.prediction.warn strong { color: var(--warn); }
 
 .heatmap {
     display: grid;
@@ -184,7 +236,7 @@ canvas {
 }
 
 .heatmap-label {
-    color: #667085;
+    color: var(--fg-dim);
     font-size: 12px;
     text-transform: capitalize;
 }
@@ -192,14 +244,14 @@ canvas {
 .heatmap-cell {
     min-height: 26px;
     border-radius: 4px;
-    background: #1f7aec;
-    color: #ffffff;
+    background: var(--chart-claude);
+    color: var(--bg);
     font-size: 10px;
     line-height: 26px;
     text-align: center;
 }
 
-.error { color: #b42318; }
+.error { color: var(--warn); }
 
 .settings-grid {
     display: grid;
@@ -215,7 +267,7 @@ canvas {
 }
 
 .settings-grid label span {
-    color: #667085;
+    color: var(--fg-dim);
     font-size: 12px;
 }
 

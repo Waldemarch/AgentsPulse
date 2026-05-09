@@ -2,19 +2,18 @@
 Local Dashboard
 ===============
 
-Private localhost dashboard with in-memory usage history.
+Private localhost dashboard with SQLite-backed usage history.
 """
 from __future__ import annotations
 
 import csv
 import json
 import mimetypes
+import sqlite3
 import threading
 import time
 import urllib.parse
 import webbrowser
-from collections import deque
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
@@ -42,22 +41,40 @@ _RANGES = {
 }
 
 
-@dataclass(frozen=True)
-class _Snapshot:
-    ts: float
-    provider: str
-    usage: dict[str, dict[str, Any]]
-    error: str | None
-
-
 class DashboardHistory:
-    """In-memory ring buffer for provider usage snapshots."""
+    """SQLite-backed storage for provider usage snapshots."""
 
-    def __init__(self, max_age_seconds: int = _MAX_AGE_SECONDS, max_samples: int = _MAX_SAMPLES) -> None:
+    def __init__(
+        self,
+        max_age_seconds: int = _MAX_AGE_SECONDS,
+        max_samples: int = _MAX_SAMPLES,
+        db_path: Path | None = None,
+    ) -> None:
         self.max_age_seconds = max_age_seconds
         self.max_samples = max_samples
+        self._db_path = db_path if db_path is not None else settings_write_path().parent / 'agentpulse-history.db'
         self._lock = threading.Lock()
-        self._items: deque[_Snapshot] = deque()
+        self._init_db()
+
+    def _init_db(self) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        try:
+            con.execute(
+                'CREATE TABLE IF NOT EXISTS snapshots ('
+                '    id INTEGER PRIMARY KEY AUTOINCREMENT,'
+                '    ts REAL NOT NULL,'
+                '    provider TEXT NOT NULL,'
+                '    field TEXT NOT NULL DEFAULT \'\','
+                '    utilization REAL,'
+                '    resets_at TEXT NOT NULL DEFAULT \'\','
+                '    error TEXT'
+                ')'
+            )
+            con.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts)')
+            con.commit()
+        finally:
+            con.close()
 
     def record(self, provider: str, data: dict[str, Any], *, ts: float | None = None) -> None:
         """Record one sanitized provider snapshot.
@@ -66,50 +83,52 @@ class DashboardHistory:
         not stored.  Only quota percentages and reset timestamps are kept.
         """
         now = time.time() if ts is None else ts
-        usage: dict[str, dict[str, Any]] = {}
+        error = data.get('error') if isinstance(data.get('error'), str) else None
 
-        if 'error' not in data:
+        rows_to_insert: list[tuple[float, str, str, float | None, str, str | None]] = []
+        if 'error' in data:
+            rows_to_insert.append((now, provider, '', None, '', error))
+        else:
             for key, value in data.items():
                 if key == 'extra_usage':
                     continue
                 if not isinstance(value, dict) or value.get('utilization') is None:
                     continue
-                usage[key] = {
-                    'utilization': float(value.get('utilization') or 0),
-                    'resets_at': value.get('resets_at', '') or '',
-                }
+                rows_to_insert.append((
+                    now,
+                    provider,
+                    key,
+                    float(value.get('utilization') or 0),
+                    value.get('resets_at', '') or '',
+                    None,
+                ))
 
-        error = data.get('error') if isinstance(data.get('error'), str) else None
+        cutoff = now - self.max_age_seconds
         with self._lock:
-            self._items.append(_Snapshot(ts=now, provider=provider, usage=usage, error=error))
-            self._prune_locked(now)
+            con = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            try:
+                con.executemany(
+                    'INSERT INTO snapshots (ts, provider, field, utilization, resets_at, error) VALUES (?,?,?,?,?,?)',
+                    rows_to_insert,
+                )
+                con.execute('DELETE FROM snapshots WHERE ts < ?', (cutoff,))
+                con.commit()
+            finally:
+                con.close()
 
     def rows(self, range_name: str = '24h', *, now: float | None = None) -> list[dict[str, Any]]:
         """Return flattened rows for the requested time range."""
         cutoff = (time.time() if now is None else now) - _RANGES.get(range_name, _RANGES['24h'])
-        rows: list[dict[str, Any]] = []
-        with self._lock:
-            items = list(self._items)
-
-        for item in items:
-            if item.ts < cutoff:
-                continue
-            if not item.usage:
-                rows.append({
-                    'ts': item.ts, 'provider': item.provider, 'field': '',
-                    'utilization': None, 'resets_at': '', 'error': item.error,
-                })
-                continue
-            for field, entry in item.usage.items():
-                rows.append({
-                    'ts': item.ts,
-                    'provider': item.provider,
-                    'field': field,
-                    'utilization': entry['utilization'],
-                    'resets_at': entry['resets_at'],
-                    'error': item.error,
-                })
-        return rows
+        con = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        try:
+            con.row_factory = sqlite3.Row
+            cursor = con.execute(
+                'SELECT ts, provider, field, utilization, resets_at, error FROM snapshots WHERE ts >= ? ORDER BY ts',
+                (cutoff,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            con.close()
 
     def to_csv(self, range_name: str = '24h') -> str:
         """Return history rows as CSV."""
@@ -126,11 +145,6 @@ class DashboardHistory:
                 'error': row['error'] or '',
             })
         return output.getvalue()
-
-    def _prune_locked(self, now: float) -> None:
-        cutoff = now - self.max_age_seconds
-        while self._items and (len(self._items) > self.max_samples or self._items[0].ts < cutoff):
-            self._items.popleft()
 
 
 class DashboardServer:

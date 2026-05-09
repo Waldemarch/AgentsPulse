@@ -1,12 +1,43 @@
-const colors = {
-    claude: '#1f7aec',
-    codex: '#13a579',
-    seven: '#8b5cf6',
-    warn: '#d64545',
-    grid: '#d9dee7',
-    text: '#20242a',
-    dim: '#667085',
-};
+function getColors() {
+    const s = getComputedStyle(document.documentElement);
+    const v = (name) => s.getPropertyValue(name).trim();
+    return {
+        claude: v('--chart-claude'),
+        codex: v('--chart-codex'),
+        seven: v('--chart-seven'),
+        warn: v('--chart-warn'),
+        grid: v('--border'),
+        text: v('--fg'),
+        dim: v('--fg-dim'),
+    };
+}
+
+const _THEME_KEY = 'ap-theme';
+
+function initTheme() {
+    if (localStorage.getItem(_THEME_KEY) === 'light') {
+        document.documentElement.dataset.theme = 'light';
+    }
+    _syncThemeBtn();
+}
+
+function _syncThemeBtn() {
+    document.getElementById('themeBtn').textContent =
+        document.documentElement.dataset.theme === 'light' ? '☾' : '☀';
+}
+
+document.getElementById('themeBtn').addEventListener('click', () => {
+    const light = document.documentElement.dataset.theme === 'light';
+    if (light) {
+        delete document.documentElement.dataset.theme;
+        localStorage.removeItem(_THEME_KEY);
+    } else {
+        document.documentElement.dataset.theme = 'light';
+        localStorage.setItem(_THEME_KEY, 'light');
+    }
+    _syncThemeBtn();
+    if (state.history) render();
+});
 
 let state = { status: null, history: null, range: '24h' };
 
@@ -246,6 +277,7 @@ function renderHeatmap(rows, settings) {
 }
 
 function drawLineChart(canvas, points, getY, getKey, label, fixed = {}) {
+    const colors = getColors();
     const ctx = canvas.getContext('2d');
     const ratio = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -289,7 +321,7 @@ function drawLineChart(canvas, points, getY, getKey, label, fixed = {}) {
     let idx = 0;
     for (const [key, group] of Object.entries(groups)) {
         group.sort((a, b) => a.ts - b.ts);
-        ctx.strokeStyle = lineColor(key, idx++);
+        ctx.strokeStyle = lineColor(key, idx++, colors);
         ctx.lineWidth = 2;
         ctx.beginPath();
         group.forEach((p, i) => {
@@ -309,7 +341,7 @@ function groupRows(rows, keyFn = r => `${r.provider}:${r.field}`) {
     }, {});
 }
 
-function lineColor(key, index) {
+function lineColor(key, index, colors) {
     if (key.includes('codex')) return key.includes('seven') ? '#0f766e' : colors.codex;
     if (key.includes('seven')) return colors.seven;
     return [colors.claude, '#f59e0b', '#db2777', '#475569'][index % 4];
@@ -408,6 +440,7 @@ async function testEvent(event) {
     document.getElementById('settingsStatus').textContent = result.ok ? `test ${event} fired` : `test failed`;
 }
 
+initTheme();
 refresh();
 loadSettings();
 setInterval(refresh, 15000);
