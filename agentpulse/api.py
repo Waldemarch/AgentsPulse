@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -107,39 +108,51 @@ def _parse_retry_after(response: requests.Response | None) -> int | None:
     return _retry_after(response)
 
 
+# Delays (seconds) between retry attempts for transient failures; first entry is always 0 (initial attempt).
+_RETRY_DELAYS = (0, 2, 4)
+
+
 def _request_json(url: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     headers = api_headers()
     if headers is None:
         return None, {'error': T['no_token']}
 
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return (data if isinstance(data, dict) else {}, None)
-    except requests.ConnectionError:
-        return None, {'error': T['connection_error']}
-    except requests.HTTPError as exc:
-        response = exc.response
-        code = response.status_code if response is not None else 0
-        details: dict[str, Any] = {}
-        message = _server_message(response)
-        if message:
-            details['server_message'] = message
-        if code == 401:
-            details.update({'error': T['auth_expired'], 'auth_error': True})
-        elif code == 429:
-            retry = _retry_after(response)
-            if retry is not None:
-                details['retry_after'] = retry
-            details.update({'error': T['http_error'].format(code=429), 'rate_limited': True})
-        elif 500 <= code < 600:
-            details['error'] = T['server_error'].format(code=code)
-        else:
-            details['error'] = T['http_error'].format(code=code or '?')
-        return None, details
-    except Exception:
-        return None, {'error': T['connection_error']}
+    last_error: dict[str, Any] = {'error': T['connection_error']}
+    for delay in _RETRY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            return (data if isinstance(data, dict) else {}, None)
+        except requests.ConnectionError:
+            last_error = {'error': T['connection_error']}
+        except requests.HTTPError as exc:
+            response = exc.response
+            code = response.status_code if response is not None else 0
+            details: dict[str, Any] = {}
+            message = _server_message(response)
+            if message:
+                details['server_message'] = message
+            if code == 401:
+                details.update({'error': T['auth_expired'], 'auth_error': True})
+                return None, details  # auth errors are handled at cache level; no retry
+            elif code == 429:
+                retry = _retry_after(response)
+                if retry is not None:
+                    details['retry_after'] = retry
+                details.update({'error': T['http_error'].format(code=429), 'rate_limited': True})
+                return None, details  # backoff managed by cache; no retry here
+            elif 500 <= code < 600:
+                last_error = dict(details, error=T['server_error'].format(code=code))
+            else:
+                details['error'] = T['http_error'].format(code=code or '?')
+                return None, details  # other 4xx are definitive; no retry
+        except Exception:
+            last_error = {'error': T['connection_error']}
+
+    return None, last_error
 
 
 def fetch_usage() -> dict[str, Any]:

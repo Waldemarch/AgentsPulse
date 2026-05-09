@@ -23,7 +23,7 @@ __all__ = [
     'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
     'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
-    'dashboard_settings', 'get_alert_thresholds', 'save_dashboard_settings', 'settings_write_path',
+    'dashboard_settings', 'get_alert_thresholds', 'reload', 'save_dashboard_settings', 'settings_write_path',
 ]
 
 SETTINGS_FILENAME = 'agentpulse-settings.json'
@@ -331,6 +331,7 @@ def save_dashboard_settings(data: dict[str, object]) -> tuple[bool, list[str], P
         path.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     except OSError as exc:
         return False, [str(exc)], path
+    reload()
     return True, [], path
 
 
@@ -416,3 +417,37 @@ def get_alert_thresholds(variant_key: str, provider: str = 'claude') -> list[flo
             return _S[base_key]
         return _ALERT_THRESHOLDS.get(base, [])
     return []
+
+
+def reload() -> None:
+    """Re-read the settings file and update module-level variables in place.
+
+    Called automatically after a successful dashboard save so that changes
+    take effect immediately without restarting the application.
+    Only dashboard-configurable keys are updated; static values such as
+    poll intervals require a restart (they are read at import time by other
+    modules that cache them locally).
+    """
+    global _S
+    global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END
+    global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
+    global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
+    global HEATMAP_ENABLED, CODEX_ENABLED
+    global ICON_FIELDS, TOOLTIP_FIELDS
+    global ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW
+
+    _S = _load_settings()
+
+    QUIET_HOURS_ENABLED = _S.get('quiet_hours_enabled', False)
+    QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
+    QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
+    ON_RESET_COMMAND = _S.get('on_reset_command', [])
+    ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
+    PREDICTION_ENABLED = _S.get('prediction_enabled', True)
+    PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
+    HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
+    CODEX_ENABLED = _S.get('codex_enabled', True)
+    ICON_FIELDS = _S.get('icon_fields', ['five_hour', 'seven_day'])
+    TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
+    ALERT_TIME_AWARE = _S.get('alert_time_aware', True)
+    ALERT_TIME_AWARE_BELOW = _S.get('alert_time_aware_below', 90)
