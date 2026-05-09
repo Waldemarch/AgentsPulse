@@ -4,6 +4,7 @@ let providers = { claude: null, codex: null };
 let selectedTab = 'all';
 let statusTimer = null;
 let statusModel = {};
+let popupSettings = { show_install_section: true, email_display: 'show' };
 
 function byId(id) {
   return document.getElementById(id);
@@ -15,6 +16,7 @@ function init(config) {
   bindStaticText(config);
   bindNodes();
   bindActions(config.codex_enabled);
+  applyPopupSettings(config.popup_settings || {});
   providers.claude = config.data;
   providers.codex = config.codex_data;
   render(currentData());
@@ -37,6 +39,12 @@ function bindStaticText(config) {
   byId('headingExtraUsage').textContent = strings.extra_usage;
   byId('changelogLink').textContent = strings.changelog;
   byId('appVersion').textContent = config.app_version;
+  byId('headingSettings').textContent = strings.settings_panel;
+  byId('labelToggleInstall').textContent = strings.show_install_label;
+  byId('labelEmailDisplay').textContent = strings.email_display_label;
+  byId('segShow').textContent = strings.email_show;
+  byId('segBlur').textContent = strings.email_blur;
+  byId('segHide').textContent = strings.email_hide;
 }
 
 function bindNodes() {
@@ -58,18 +66,62 @@ function bindNodes() {
     status: byId('statusSection'),
     statusText: byId('statusText'),
     tabs: byId('tabBar'),
+    settingsSection: byId('settingsSection'),
+    settingsBtn: byId('settingsBtn'),
+    toggleInstall: byId('toggleInstall'),
+    emailDisplayControl: byId('emailDisplayControl'),
   };
 }
 
 function bindActions(codexEnabled) {
   byId('closeBtn').addEventListener('click', () => pywebview.api.close());
   byId('changelogLink').addEventListener('click', () => pywebview.api.open_url());
+  nodes.settingsBtn.addEventListener('click', toggleSettingsPanel);
+  nodes.toggleInstall.addEventListener('change', () => {
+    saveSetting('show_install_section', nodes.toggleInstall.checked);
+    renderInstallations(getCurrentInstallations());
+  });
+  nodes.emailDisplayControl.querySelectorAll('.seg-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      saveSetting('email_display', btn.dataset.value);
+      renderProfile(getCurrentProfile());
+    });
+  });
   if (!codexEnabled) return;
   nodes.tabs.classList.remove('hidden');
   nodes.tabs.querySelectorAll('.tab-btn').forEach((button) => {
     button.addEventListener('click', () => chooseTab(button.dataset.tab));
   });
 }
+
+function toggleSettingsPanel() {
+  const visible = nodes.settingsSection.classList.toggle('visible');
+  nodes.settingsBtn.classList.toggle('active', visible);
+}
+
+function applyPopupSettings(settings) {
+  popupSettings = Object.assign({ show_install_section: true, email_display: 'show' }, settings);
+  nodes.toggleInstall.checked = popupSettings.show_install_section !== false;
+  nodes.emailDisplayControl.querySelectorAll('.seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.value === popupSettings.email_display);
+  });
+}
+
+function saveSetting(key, value) {
+  popupSettings[key] = value;
+  if (key === 'email_display') {
+    nodes.emailDisplayControl.querySelectorAll('.seg-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.value === value);
+    });
+  }
+  pywebview.api.save_popup_settings({ [key]: value });
+}
+
+let _lastProfile = null;
+let _lastInstallations = [];
+
+function getCurrentProfile() { return _lastProfile; }
+function getCurrentInstallations() { return _lastInstallations; }
 
 function chooseTab(tab) {
   if (tab === selectedTab) return;
@@ -130,12 +182,18 @@ function render(data) {
 }
 
 function renderProfile(profile) {
+  _lastProfile = profile;
   const visible = !!profile;
   nodes.account.classList.toggle('visible', visible);
   if (!visible) return;
-  nodes.emailValue.textContent = profile.email || '';
+  const emailMode = popupSettings.email_display || 'show';
+  const showEmail = !!profile.email && emailMode !== 'hide';
+  nodes.emailRow.style.display = showEmail ? '' : 'none';
+  if (showEmail) {
+    nodes.emailValue.textContent = profile.email;
+    nodes.emailValue.classList.toggle('email-blurred', emailMode === 'blur');
+  }
   nodes.planValue.textContent = profile.plan || '';
-  nodes.emailRow.style.display = profile.email ? '' : 'none';
   nodes.planRow.style.display = profile.plan ? '' : 'none';
 }
 
@@ -161,8 +219,10 @@ function renderExtra(extra) {
 }
 
 function renderInstallations(items) {
-  nodes.install.classList.toggle('visible', items.length > 0);
-  if (!items.length) return;
+  _lastInstallations = items;
+  const show = popupSettings.show_install_section !== false;
+  nodes.install.classList.toggle('visible', show && items.length > 0);
+  if (!show || !items.length) return;
   nodes.installTitle.textContent = selectedTab === 'codex' ? strings.codex_cli : strings.claude_code;
   nodes.installRows.replaceChildren(...items.map((item) => {
     const row = document.createElement('div');

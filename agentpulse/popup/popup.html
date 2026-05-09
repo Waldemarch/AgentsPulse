@@ -13,8 +13,28 @@
       <button type="button" class="tab-btn" data-tab="claude">Claude</button>
       <button type="button" class="tab-btn" data-tab="codex">Codex</button>
     </nav>
+    <button type="button" id="settingsBtn" aria-label="Settings">&#9881;</button>
     <button type="button" id="closeBtn" aria-label="Close">x</button>
   </header>
+
+  <section id="settingsSection">
+    <h2 id="headingSettings"></h2>
+    <div class="setting-row">
+      <span class="setting-label" id="labelToggleInstall"></span>
+      <label class="toggle" for="toggleInstall">
+        <input type="checkbox" id="toggleInstall">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label" id="labelEmailDisplay"></span>
+      <div class="seg" id="emailDisplayControl" role="group">
+        <button type="button" class="seg-btn" data-value="show" id="segShow"></button>
+        <button type="button" class="seg-btn" data-value="blur" id="segBlur"></button>
+        <button type="button" class="seg-btn" data-value="hide" id="segHide"></button>
+      </div>
+    </div>
+  </section>
 
   <section id="accountSection">
     <h2 id="headingAccount"></h2>

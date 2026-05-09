@@ -30,6 +30,7 @@ header {
   font-weight: 700;
 }
 
+#settingsBtn,
 #closeBtn {
   background: transparent;
   border: 0;
@@ -39,6 +40,8 @@ header {
   padding: 2px 4px;
 }
 
+#settingsBtn:hover,
+#settingsBtn.active,
 #closeBtn:hover { color: var(--fg-heading); }
 
 #tabBar {
@@ -223,3 +226,81 @@ footer {
 
 #appVersion { flex-shrink: 0; }
 footer.error #statusText { color: var(--bar-fg-warn); }
+
+/* ── Settings panel ── */
+.setting-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setting-label { color: var(--fg); }
+
+/* Toggle switch */
+.toggle {
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.toggle input { display: none; }
+
+.toggle-track {
+  background: var(--bar-bg);
+  border-radius: 11px;
+  display: flex;
+  height: 22px;
+  position: relative;
+  transition: background .2s;
+  width: 40px;
+}
+
+.toggle-thumb {
+  background: var(--fg-dim);
+  border-radius: 50%;
+  height: 16px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: left .2s, background .2s;
+  width: 16px;
+}
+
+.toggle input:checked ~ .toggle-track { background: var(--bar-fg); }
+.toggle input:checked ~ .toggle-track .toggle-thumb {
+  background: var(--fg-heading);
+  left: 21px;
+}
+
+/* Segmented control */
+.seg {
+  background: var(--bar-bg);
+  border-radius: 6px;
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+}
+
+.seg-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font: 600 11px/1.2 system-ui, sans-serif;
+  padding: 3px 9px;
+}
+
+.seg-btn:hover { color: var(--fg); }
+.seg-btn.active { background: var(--bg); color: var(--fg-heading); }
+
+/* Email blur */
+.email-blurred {
+  filter: blur(5px);
+  transition: filter .15s ease;
+  cursor: pointer;
+}
+
+.email-blurred:hover { filter: none; }
