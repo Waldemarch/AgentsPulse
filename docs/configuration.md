@@ -153,11 +153,11 @@ Event commands still run during quiet hours; only desktop notifications are defe
 
 ## Currency
 
-The Anthropic API does not include currency information, so the app detects the currency symbol from your Windows locale settings. If your Windows locale currency differs from the currency Anthropic bills you in, you can override just the symbol here. Number formatting (decimal separator, symbol position) always follows your system locale.
+The Anthropic API does not include currency information, so the app defaults to the euro symbol (`€`) for the extra-usage amounts. If Anthropic bills you in a different currency, override the symbol here. Number formatting (decimal separator, symbol position) always follows your system locale.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `currency_symbol` | *(auto-detected)* | Override the auto-detected currency symbol (e.g., `"$"`, `"€"`, `"¥"`) |
+| `currency_symbol` | `"€"` | Override the currency symbol shown for extra-usage spend (e.g., `"$"`, `"€"`, `"¥"`) |
 
 ## Tray icon colors
 
