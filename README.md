@@ -4,11 +4,11 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ## Screenshots
 
-![Agents Pulse combined Claude and Codex usage popup with tray icon](Screens/popup-all-tray.png)
+![All tab — combined Claude and Codex session and weekly usage](Screens/popup-all.png)
 
-![Claude usage detail popup with account, quota, and extra usage](Screens/popup-claude-detail.png)
+![Claude tab — account info, session and weekly quota, extra usage spend](Screens/popup-claude.png)
 
-![Compact combined usage popup near the Windows tray](Screens/popup-all-compact.png)
+![Codex tab — account info, session and weekly Codex quota](Screens/popup-codex.png)
 
 ## Features
 
