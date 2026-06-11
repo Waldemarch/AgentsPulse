@@ -1,12 +1,24 @@
 """Tests for local dashboard history and payload helpers."""
 from __future__ import annotations
 
-import unittest
-from unittest.mock import MagicMock, patch
+import json
 import socket
+import sys
 import time
+import types
+import unittest
+import urllib.request
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from agentpulse.dashboard import DashboardHistory, DashboardServer, _status_payload
+from agentpulse.dashboard import DashboardHistory, DashboardServer, _apply_autostart, _autostart_enabled, _status_payload
+
+
+def _fake_autostart_module(enabled: bool = False) -> types.ModuleType:
+    fake = types.ModuleType('agentpulse.autostart')
+    fake.is_autostart_enabled = MagicMock(return_value=enabled)
+    fake.set_autostart = MagicMock()
+    return fake
 
 
 class TestDashboardHistory(unittest.TestCase):
@@ -75,6 +87,105 @@ class TestStatusPayload(unittest.TestCase):
         self.assertNotIn('profile', payload['providers'][0])
         self.assertNotIn('access_token', str(payload).lower())
         self.assertEqual(payload['providers'][0]['usage'][0]['utilization'], 50.0)
+
+
+class TestAutostartHelpers(unittest.TestCase):
+    def test_autostart_enabled_reads_registry_state(self):
+        fake = _fake_autostart_module(enabled=True)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertTrue(_autostart_enabled())
+
+    def test_autostart_enabled_returns_false_on_registry_error(self):
+        fake = _fake_autostart_module()
+        fake.is_autostart_enabled.side_effect = OSError('denied')
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertFalse(_autostart_enabled())
+
+    def test_apply_autostart_none_is_noop(self):
+        fake = _fake_autostart_module()
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertEqual(_apply_autostart(None), [])
+        fake.set_autostart.assert_not_called()
+
+    def test_apply_autostart_rejects_non_boolean(self):
+        fake = _fake_autostart_module()
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            errors = _apply_autostart('yes')
+        self.assertEqual(errors, ['autostart: expected true or false'])
+        fake.set_autostart.assert_not_called()
+
+    def test_apply_autostart_enables_when_currently_disabled(self):
+        fake = _fake_autostart_module(enabled=False)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertEqual(_apply_autostart(True), [])
+        fake.set_autostart.assert_called_once_with(True)
+
+    def test_apply_autostart_disables_when_currently_enabled(self):
+        fake = _fake_autostart_module(enabled=True)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertEqual(_apply_autostart(False), [])
+        fake.set_autostart.assert_called_once_with(False)
+
+    def test_apply_autostart_skips_registry_write_when_state_matches(self):
+        fake = _fake_autostart_module(enabled=True)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            self.assertEqual(_apply_autostart(True), [])
+        fake.set_autostart.assert_not_called()
+
+    def test_apply_autostart_reports_registry_errors(self):
+        fake = _fake_autostart_module(enabled=False)
+        fake.set_autostart.side_effect = OSError('denied')
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            errors = _apply_autostart(True)
+        self.assertEqual(errors, ['autostart: denied'])
+
+
+class TestSettingsEndpoint(unittest.TestCase):
+    def setUp(self):
+        self.server = DashboardServer(MagicMock(), port=0)
+        self.url = self.server.start()
+        self.addCleanup(self.server.stop)
+
+    def _get_json(self, path):
+        with urllib.request.urlopen(self.url.rstrip('/') + path) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def _post_json(self, path, payload):
+        request = urllib.request.Request(
+            self.url.rstrip('/') + path,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def test_get_settings_includes_autostart_state(self):
+        fake = _fake_autostart_module(enabled=True)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            data = self._get_json('/api/settings')
+
+        self.assertTrue(data['settings']['autostart'])
+
+    def test_post_settings_applies_autostart_and_saves_remaining_keys(self):
+        fake = _fake_autostart_module(enabled=False)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}), \
+                patch('agentpulse.dashboard.save_dashboard_settings', return_value=(True, [], Path('settings.json'))) as mock_save:
+            result = self._post_json('/api/settings', {'autostart': True, 'codex_enabled': False})
+
+        self.assertTrue(result['ok'])
+        fake.set_autostart.assert_called_once_with(True)
+        mock_save.assert_called_once_with({'codex_enabled': False})
+
+    def test_post_settings_reports_invalid_autostart_value(self):
+        fake = _fake_autostart_module()
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}), \
+                patch('agentpulse.dashboard.save_dashboard_settings', return_value=(True, [], Path('settings.json'))):
+            result = self._post_json('/api/settings', {'autostart': 'yes'})
+
+        self.assertFalse(result['ok'])
+        self.assertIn('autostart: expected true or false', result['errors'])
+        fake.set_autostart.assert_not_called()
 
 
 class TestDashboardServer(unittest.TestCase):

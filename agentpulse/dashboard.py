@@ -224,8 +224,10 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 extra_headers={'Content-Disposition': f'attachment; filename="agentpulse-history-{range_name}.csv"'},
             )
         elif path == '/api/settings':
+            settings = dict(dashboard_settings())
+            settings['autostart'] = _autostart_enabled()
             self._send_json({
-                'settings': dashboard_settings(),
+                'settings': settings,
                 'path': str(settings_write_path()),
                 'restart_required': True,
             })
@@ -246,7 +248,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == '/api/settings':
-            ok, errors, path = save_dashboard_settings(payload if isinstance(payload, dict) else {})
+            payload = payload if isinstance(payload, dict) else {}
+            autostart_errors = _apply_autostart(payload.pop('autostart', None))
+            ok, errors, path = save_dashboard_settings(payload)
+            errors = autostart_errors + errors
+            ok = ok and not errors
             self._send_json({'ok': ok, 'errors': errors, 'path': str(path), 'restart_required': ok})
         elif parsed.path == '/api/test-event':
             event = payload.get('event') if isinstance(payload, dict) else None
@@ -281,6 +287,38 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+
+def _autostart_enabled() -> bool:
+    """Return the current Run-key autostart state, False when unreadable."""
+    from .autostart import is_autostart_enabled
+
+    try:
+        return is_autostart_enabled()
+    except OSError:
+        return False
+
+
+def _apply_autostart(value: object) -> list[str]:
+    """Apply an autostart toggle from the dashboard, returning any errors.
+
+    The Run-key change takes effect immediately and is intentionally kept
+    out of the settings file - the Windows registry is the single source
+    of truth, shared with the tray-menu toggle.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, bool):
+        return ['autostart: expected true or false']
+
+    from .autostart import is_autostart_enabled, set_autostart
+
+    try:
+        if value != is_autostart_enabled():
+            set_autostart(value)
+    except OSError as exc:
+        return [f'autostart: {exc}']
+    return []
 
 
 def _status_payload(app: AgentPulse) -> dict[str, Any]:
