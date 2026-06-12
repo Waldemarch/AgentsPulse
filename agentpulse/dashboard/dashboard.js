@@ -1,12 +1,14 @@
 const colors = {
-    claude: '#1f7aec',
+    claude: '#2f7ef7',
     codex: '#13a579',
     seven: '#8b5cf6',
     warn: '#d64545',
-    grid: '#d9dee7',
-    text: '#20242a',
-    dim: '#667085',
 };
+
+function themeColor(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+}
 
 let state = { status: null, history: null, range: '24h' };
 
@@ -31,6 +33,7 @@ async function refresh() {
 async function loadSettings() {
     const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
     const s = data.settings || {};
+    document.getElementById('autostartEnabled').checked = !!s.autostart;
     document.getElementById('codexEnabled').checked = !!s.codex_enabled;
     document.getElementById('tooltipFields').value = (s.tooltip_fields || []).join(', ');
     document.getElementById('thresholdClaude5h').value = (s.alert_thresholds_five_hour || []).join(', ');
@@ -88,7 +91,7 @@ function providerCard(provider) {
                 <span>${escapeHtml(entry.label)}</span>
                 <strong>${pct}%</strong>
             </div>
-            <div class="bar"><div class="fill ${pct >= 100 ? 'warn' : ''}" style="width:${Math.min(100, Math.max(0, pct))}%"></div></div>
+            <div class="bar"><div class="fill ${pct >= 100 ? 'warn' : pct >= 80 ? 'high' : ''}" style="width:${Math.min(100, Math.max(0, pct))}%"></div></div>
             <p class="muted">${escapeHtml(metricSubtext(entry))}</p>
         `;
         list.appendChild(item);
@@ -258,8 +261,8 @@ function drawLineChart(canvas, points, getY, getKey, label, fixed = {}) {
     ctx.clearRect(0, 0, w, h);
 
     const pad = { l: 42, r: 14, t: 14, b: 28 };
-    ctx.strokeStyle = colors.grid;
-    ctx.fillStyle = colors.dim;
+    ctx.strokeStyle = themeColor('--chart-grid', '#d9dee7');
+    ctx.fillStyle = themeColor('--chart-text', '#667085');
     ctx.font = '12px Segoe UI, sans-serif';
 
     for (let i = 0; i <= 4; i++) {
@@ -371,6 +374,7 @@ function parseNumbers(value) {
 document.getElementById('settingsForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = {
+        autostart: document.getElementById('autostartEnabled').checked,
         codex_enabled: document.getElementById('codexEnabled').checked,
         tooltip_fields: parseList(document.getElementById('tooltipFields').value),
         alert_thresholds_five_hour: parseNumbers(document.getElementById('thresholdClaude5h').value),

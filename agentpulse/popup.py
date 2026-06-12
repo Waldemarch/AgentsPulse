@@ -20,10 +20,11 @@ from .formatting import (
     format_credits, midnight_positions, popup_label, time_until,
 )
 from .i18n import T
+from . import settings
 from .settings import (
     BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG, CODEX_ENABLED,
-    EMAIL_DISPLAY, FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS,
-    SHOW_INSTALL_SECTION, save_dashboard_settings,
+    FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS,
+    save_dashboard_settings,
 )
 
 if TYPE_CHECKING:
@@ -188,8 +189,10 @@ def _init_config(
         'app_version': __version__,
         'codex_enabled': CODEX_ENABLED and codex_snap is not None,
         'popup_settings': {
-            'show_install_section': SHOW_INSTALL_SECTION,
-            'email_display': EMAIL_DISPLAY,
+            # Read via the module so values saved from the popup (which call
+            # settings.reload()) are reflected the next time it opens.
+            'show_install_section': settings.SHOW_INSTALL_SECTION,
+            'email_display': settings.EMAIL_DISPLAY,
         },
         'data': _snapshot_to_dict(snap, next_poll_time=next_poll_time),
         'codex_data': _codex_snapshot_to_dict(codex_snap, codex_ver) if codex_snap is not None else None,

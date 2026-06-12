@@ -31,7 +31,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Visual quality
 
-- **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. The dashboard also has a settings panel for configuring alerts and display options.
+- **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. The dashboard follows your system light/dark theme and has a settings panel for configuring alerts, autostart, and display options.
 
 ### Reliability
 
@@ -56,7 +56,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 2. Place it anywhere you like (next to your projects, in a tools folder, etc.).
 3. Double-click to run. The tray icon appears immediately.
 
-No installer, no admin rights required. To start with Windows, right-click the tray icon and enable **Start with Windows**.
+No installer, no admin rights required. To start with Windows, right-click the tray icon and enable **Start with Windows**, or use the same toggle in the dashboard settings panel.
 
 ## Quick start
 
