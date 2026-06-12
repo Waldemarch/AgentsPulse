@@ -4,7 +4,7 @@ let providers = { claude: null, codex: null };
 let selectedTab = 'all';
 let statusTimer = null;
 let statusModel = {};
-let popupSettings = { show_install_section: true, email_display: 'show' };
+let popupSettings = { show_install_section: false, email_display: 'show' };
 
 function byId(id) {
   return document.getElementById(id);
@@ -100,8 +100,8 @@ function toggleSettingsPanel() {
 }
 
 function applyPopupSettings(settings) {
-  popupSettings = Object.assign({ show_install_section: true, email_display: 'show' }, settings);
-  nodes.toggleInstall.checked = popupSettings.show_install_section !== false;
+  popupSettings = Object.assign({ show_install_section: false, email_display: 'show' }, settings);
+  nodes.toggleInstall.checked = popupSettings.show_install_section === true;
   nodes.emailDisplayControl.querySelectorAll('.seg-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.value === popupSettings.email_display);
   });
@@ -220,7 +220,7 @@ function renderExtra(extra) {
 
 function renderInstallations(items) {
   _lastInstallations = items;
-  const show = popupSettings.show_install_section !== false;
+  const show = popupSettings.show_install_section === true;
   nodes.install.classList.toggle('visible', show && items.length > 0);
   if (!show || !items.length) return;
   nodes.installTitle.textContent = selectedTab === 'codex' ? strings.codex_cli : strings.claude_code;
