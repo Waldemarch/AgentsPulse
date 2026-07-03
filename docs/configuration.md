@@ -121,9 +121,17 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 
 ## Local dashboard
 
-Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard stores an in-memory, token-free ring buffer of usage snapshots for up to 30 days (or 12,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range.
+Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard keeps a token-free ring buffer of usage snapshots for up to 30 days (or 40,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range.
 
-The dashboard is intentionally not exposed on the network. Usage history is not written to disk. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
+Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
+
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
+
+History settings:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `history_persist` | `true` | Persist dashboard usage history to `agentpulse-history.jsonl` so it survives restarts. Set to `false` for in-memory history only |
 
 Burn-rate and ETA values are calculated locally from the current utilization, reset time, and period length. A healthy pace means the current utilization is at or below the percentage of time elapsed in that quota period.
 

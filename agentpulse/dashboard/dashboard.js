@@ -10,6 +10,34 @@ function themeColor(name, fallback) {
     return value || fallback;
 }
 
+// Per-run session token passed by the tray app in the URL; required for POST
+// endpoints so pages from other origins cannot forge settings or test-event
+// requests. Kept in sessionStorage and stripped from the address bar.
+const authToken = (() => {
+    const params = new URLSearchParams(location.search);
+    const fromUrl = params.get('token');
+    if (fromUrl) {
+        sessionStorage.setItem('agentpulse-token', fromUrl);
+        params.delete('token');
+        const query = params.toString();
+        history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
+        return fromUrl;
+    }
+    return sessionStorage.getItem('agentpulse-token') || '';
+})();
+
+async function postJson(path, payload) {
+    const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AgentsPulse-Token': authToken },
+        body: JSON.stringify(payload),
+    });
+    if (response.status === 403) {
+        return { ok: false, errors: ['session expired - reopen the dashboard from the tray menu'] };
+    }
+    return response.json();
+}
+
 let state = { status: null, history: null, range: '24h' };
 
 const rangeSelect = document.getElementById('rangeSelect');
@@ -390,11 +418,7 @@ document.getElementById('settingsForm').addEventListener('submit', async (event)
         on_reset_command: document.getElementById('resetCommand').value.trim(),
         on_threshold_command: document.getElementById('thresholdCommand').value.trim(),
     };
-    const result = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-    }).then(r => r.json());
+    const result = await postJson('/api/settings', payload);
     document.getElementById('settingsStatus').textContent = result.ok
         ? `saved to ${result.path}; restart required`
         : `error: ${(result.errors || []).join(', ')}`;
@@ -404,12 +428,10 @@ document.getElementById('testReset').addEventListener('click', () => testEvent('
 document.getElementById('testThreshold').addEventListener('click', () => testEvent('threshold'));
 
 async function testEvent(event) {
-    const result = await fetch('/api/test-event', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event }),
-    }).then(r => r.json());
-    document.getElementById('settingsStatus').textContent = result.ok ? `test ${event} fired` : `test failed`;
+    const result = await postJson('/api/test-event', { event });
+    document.getElementById('settingsStatus').textContent = result.ok
+        ? `test ${event} fired`
+        : `test failed: ${(result.errors || []).join(', ') || 'unknown error'}`;
 }
 
 refresh();

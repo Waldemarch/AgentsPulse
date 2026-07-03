@@ -21,9 +21,10 @@ dist/
 # Local assistant/tooling state
 .claude/
 
-# User settings
+# User settings and local data
 agentpulse-settings.json
 usage-monitor-settings.json
+agentpulse-history.jsonl
 
 # OS
 Thumbs.db

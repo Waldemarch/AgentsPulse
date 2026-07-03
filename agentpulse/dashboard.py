@@ -2,13 +2,16 @@
 Local Dashboard
 ===============
 
-Private localhost dashboard with in-memory usage history.
+Private localhost dashboard with persistent usage history.
 """
 from __future__ import annotations
 
 import csv
+import hmac
 import json
+import logging
 import mimetypes
+import secrets
 import threading
 import time
 import urllib.parse
@@ -25,16 +28,24 @@ from . import __version__
 from .claude_cli import find_installations
 from .codex_cli import codex_version
 from .formatting import field_period, popup_label, time_until
-from .settings import DASHBOARD_HOST, DASHBOARD_PORT, dashboard_settings, save_dashboard_settings, settings_write_path
+from .settings import (
+    DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST,
+    dashboard_settings, history_write_path, save_dashboard_settings, settings_write_path,
+)
 
 if TYPE_CHECKING:
     from .app import AgentPulse
 
 __all__ = ['DashboardHistory', 'DashboardServer']
 
+log = logging.getLogger(__name__)
+
 _DASHBOARD_DIR = Path(__file__).parent / 'dashboard'
 _MAX_AGE_SECONDS = 30 * 24 * 3600
-_MAX_SAMPLES = 12000
+# 30 days of two providers polling every 180s is ~29k snapshots; leave headroom for fast-poll bursts.
+_MAX_SAMPLES = 40000
+# Stale history-file lines tolerated before the file is compacted (rewritten from memory).
+_HISTORY_COMPACT_SLACK = 4000
 _RANGES = {
     '24h': 24 * 3600,
     '7d': 7 * 24 * 3600,
@@ -51,13 +62,25 @@ class _Snapshot:
 
 
 class DashboardHistory:
-    """In-memory ring buffer for provider usage snapshots."""
+    """Ring buffer of provider usage snapshots with optional JSONL persistence.
 
-    def __init__(self, max_age_seconds: int = _MAX_AGE_SECONDS, max_samples: int = _MAX_SAMPLES) -> None:
+    When a ``path`` is given, snapshots are appended to that file and loaded
+    back on startup, so dashboard history survives application restarts.
+    The file holds only what :meth:`record` sanitizes - quota percentages,
+    reset timestamps, and error strings.  It never contains tokens, account
+    identifiers, or profile data.
+    """
+
+    def __init__(self, max_age_seconds: int = _MAX_AGE_SECONDS, max_samples: int = _MAX_SAMPLES, path: Path | None = None) -> None:
         self.max_age_seconds = max_age_seconds
         self.max_samples = max_samples
+        self.path = path
         self._lock = threading.Lock()
         self._items: deque[_Snapshot] = deque()
+        self._file_records = 0
+        self._write_failed = False
+        if path is not None:
+            self._load()
 
     def record(self, provider: str, data: dict[str, Any], *, ts: float | None = None) -> None:
         """Record one sanitized provider snapshot.
@@ -80,9 +103,11 @@ class DashboardHistory:
                 }
 
         error = data.get('error') if isinstance(data.get('error'), str) else None
+        snapshot = _Snapshot(ts=now, provider=provider, usage=usage, error=error)
         with self._lock:
-            self._items.append(_Snapshot(ts=now, provider=provider, usage=usage, error=error))
+            self._items.append(snapshot)
             self._prune_locked(now)
+            self._persist_locked(snapshot)
 
     def rows(self, range_name: str = '24h', *, now: float | None = None) -> list[dict[str, Any]]:
         """Return flattened rows for the requested time range."""
@@ -132,15 +157,118 @@ class DashboardHistory:
         while self._items and (len(self._items) > self.max_samples or self._items[0].ts < cutoff):
             self._items.popleft()
 
+    def _load(self) -> None:
+        """Restore snapshots from the history file, compacting it when stale."""
+        assert self.path is not None
+        try:
+            lines = self.path.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            return
+
+        now = time.time()
+        with self._lock:
+            for line in lines:
+                snapshot = _parse_history_line(line)
+                if snapshot is not None:
+                    self._items.append(snapshot)
+            self._prune_locked(now)
+            self._file_records = len(lines)
+            if self._file_records != len(self._items):
+                try:
+                    self._rewrite_locked()
+                except OSError:
+                    pass
+
+    def _persist_locked(self, snapshot: _Snapshot) -> None:
+        """Append one snapshot to the history file, compacting when it grows stale."""
+        if self.path is None:
+            return
+        try:
+            if self._file_records - len(self._items) > _HISTORY_COMPACT_SLACK:
+                self._rewrite_locked()
+            else:
+                with self.path.open('a', encoding='utf-8') as handle:
+                    handle.write(_history_line(snapshot))
+                self._file_records += 1
+            self._write_failed = False
+        except OSError as exc:
+            if not self._write_failed:
+                log.warning('history write failed (%s): %s', self.path, exc)
+            self._write_failed = True
+
+    def _rewrite_locked(self) -> None:
+        """Rewrite the history file from the in-memory buffer."""
+        assert self.path is not None
+        temp_path = self.path.with_name(self.path.name + '.tmp')
+        with temp_path.open('w', encoding='utf-8') as handle:
+            for item in self._items:
+                handle.write(_history_line(item))
+        temp_path.replace(self.path)
+        self._file_records = len(self._items)
+
+
+def _history_line(snapshot: _Snapshot) -> str:
+    record: dict[str, Any] = {'ts': snapshot.ts, 'provider': snapshot.provider, 'usage': snapshot.usage}
+    if snapshot.error:
+        record['error'] = snapshot.error
+    return json.dumps(record, separators=(',', ':'), ensure_ascii=False) + '\n'
+
+
+def _parse_history_line(line: str) -> _Snapshot | None:
+    """Parse one JSONL history line, returning None for corrupt or foreign data."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+
+    ts = record.get('ts')
+    provider = record.get('provider')
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not isinstance(provider, str) or not provider:
+        return None
+
+    usage: dict[str, dict[str, Any]] = {}
+    raw_usage = record.get('usage')
+    if isinstance(raw_usage, dict):
+        for field, entry in raw_usage.items():
+            if not isinstance(field, str) or not isinstance(entry, dict):
+                continue
+            utilization = entry.get('utilization')
+            if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+                continue
+            resets_at = entry.get('resets_at')
+            usage[field] = {
+                'utilization': float(utilization),
+                'resets_at': resets_at if isinstance(resets_at, str) else '',
+            }
+
+    error = record.get('error')
+    return _Snapshot(ts=float(ts), provider=provider, usage=usage, error=error if isinstance(error, str) else None)
+
 
 class DashboardServer:
-    """Local HTTP dashboard bound to localhost only."""
+    """Local HTTP dashboard bound to localhost only.
 
-    def __init__(self, app: AgentPulse, host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT) -> None:
+    A random per-run session token protects all POST endpoints against
+    cross-site request forgery: browsers can be tricked into sending POST
+    requests to localhost from malicious web pages, so the localhost bind
+    alone is not sufficient.  The token is passed in the URL when the
+    dashboard is opened from the tray menu and echoed back by the
+    dashboard's JavaScript in a request header.
+    """
+
+    def __init__(self, app: AgentPulse, host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT, history_path: Path | None = None) -> None:
         self.app = app
         self.host = host
         self.port = port
-        self.history = DashboardHistory()
+        self.token = secrets.token_urlsafe(32)
+        if history_path is None and HISTORY_PERSIST:
+            history_path = history_write_path()
+        self.history = DashboardHistory(path=history_path)
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -156,10 +284,12 @@ class DashboardServer:
 
         app = self.app
         history = self.history
+        token = self.token
 
         class Handler(_DashboardHandler):
             dashboard_app = app
             dashboard_history = history
+            dashboard_token = token
 
         last_error: OSError | None = None
         ports = [0] if self.port == 0 else range(self.port, min(self.port + 20, 65536))
@@ -171,13 +301,18 @@ class DashboardServer:
                 last_error = exc
         if self._httpd is None:
             raise last_error or OSError(f'Could not start dashboard on {self.host}:{self.port}')
+
+        bound_port = self._httpd.server_address[1]
+        Handler.allowed_hosts = frozenset({self.host, f'{self.host}:{bound_port}', 'localhost', f'localhost:{bound_port}'})
+        Handler.allowed_origins = frozenset({f'http://{self.host}:{bound_port}', f'http://localhost:{bound_port}'})
+
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
         return self.url
 
     def open(self) -> None:
         """Start the dashboard and open it in the default browser."""
-        webbrowser.open(self.start())
+        webbrowser.open(f'{self.start()}?token={self.token}')
 
     def stop(self) -> None:
         """Stop the dashboard server."""
@@ -192,16 +327,39 @@ class DashboardServer:
 class _DashboardHandler(BaseHTTPRequestHandler):
     dashboard_app: AgentPulse
     dashboard_history: DashboardHistory
+    # Safe defaults: requests are rejected until DashboardServer.start() fills these in.
+    dashboard_token: str = ''
+    allowed_hosts: frozenset[str] = frozenset()
+    allowed_origins: frozenset[str] = frozenset()
 
     def log_message(self, _format: str, *args: Any) -> None:
         return
+
+    def _request_blocked(self) -> bool:
+        """Reject non-loopback clients and forged Host headers (DNS rebinding)."""
+        if self.client_address[0] not in {'127.0.0.1', '::1'}:
+            return True
+        host = (self.headers.get('Host') or '').strip().lower()
+        return host not in self.allowed_hosts
+
+    def _post_blocked(self) -> bool:
+        """Reject cross-origin POSTs and requests without the session token (CSRF)."""
+        if self._request_blocked():
+            return True
+        origin = (self.headers.get('Origin') or '').strip().lower()
+        if origin and origin not in self.allowed_origins:
+            return True
+        if not self.dashboard_token:
+            return True
+        provided = self.headers.get('X-AgentsPulse-Token') or ''
+        return not hmac.compare_digest(provided.encode('utf-8'), self.dashboard_token.encode('utf-8'))
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
-        if self.client_address[0] not in {'127.0.0.1', '::1'}:
+        if self._request_blocked():
             self.send_error(403)
             return
 
@@ -236,7 +394,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        if self.client_address[0] not in {'127.0.0.1', '::1'}:
+        if self._post_blocked():
             self.send_error(403)
             return
 

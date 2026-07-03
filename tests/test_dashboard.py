@@ -1,12 +1,15 @@
 """Tests for local dashboard history and payload helpers."""
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import sys
+import tempfile
 import time
 import types
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -140,9 +143,15 @@ class TestAutostartHelpers(unittest.TestCase):
         self.assertEqual(errors, ['autostart: denied'])
 
 
+def _temp_history_path(test_case: unittest.TestCase) -> Path:
+    temp_dir = tempfile.TemporaryDirectory()
+    test_case.addCleanup(temp_dir.cleanup)
+    return Path(temp_dir.name) / 'history.jsonl'
+
+
 class TestSettingsEndpoint(unittest.TestCase):
     def setUp(self):
-        self.server = DashboardServer(MagicMock(), port=0)
+        self.server = DashboardServer(MagicMock(), port=0, history_path=_temp_history_path(self))
         self.url = self.server.start()
         self.addCleanup(self.server.stop)
 
@@ -150,11 +159,14 @@ class TestSettingsEndpoint(unittest.TestCase):
         with urllib.request.urlopen(self.url.rstrip('/') + path) as response:
             return json.loads(response.read().decode('utf-8'))
 
-    def _post_json(self, path, payload):
+    def _post_json(self, path, payload, *, token=None, origin=None):
+        headers = {'Content-Type': 'application/json', 'X-AgentsPulse-Token': token if token is not None else self.server.token}
+        if origin is not None:
+            headers['Origin'] = origin
         request = urllib.request.Request(
             self.url.rstrip('/') + path,
             data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
+            headers=headers,
             method='POST',
         )
         with urllib.request.urlopen(request) as response:
@@ -188,13 +200,155 @@ class TestSettingsEndpoint(unittest.TestCase):
         fake.set_autostart.assert_not_called()
 
 
+class TestRequestValidation(unittest.TestCase):
+    """CSRF and DNS-rebinding protection for the dashboard endpoints."""
+
+    def setUp(self):
+        snap = MagicMock()
+        snap.usage = {}
+        snap.last_success_time = None
+        snap.refreshing = False
+        snap.last_error = None
+        self.app = MagicMock()
+        self.app.cache.snapshot = snap
+        self.app.codex_cache = None
+        self.app._next_poll_time = None
+        self.server = DashboardServer(self.app, port=0, history_path=_temp_history_path(self))
+        self.url = self.server.start()
+        self.port = self.server._httpd.server_address[1]
+        self.addCleanup(self.server.stop)
+
+    def _raw_request(self, method, path, *, headers=None, body=None):
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.request(method, path, body=body, headers=headers or {})
+        return connection.getresponse()
+
+    def _post_status(self, path, payload, headers):
+        merged = {'Content-Type': 'application/json', 'Host': f'127.0.0.1:{self.port}', **headers}
+        return self._raw_request('POST', path, headers=merged, body=json.dumps(payload).encode('utf-8')).status
+
+    def test_get_rejected_with_forged_host_header(self):
+        response = self._raw_request('GET', '/api/status', headers={'Host': 'attacker.example'})
+        self.assertEqual(response.status, 403)
+
+    def test_get_allowed_with_loopback_host_header(self):
+        response = self._raw_request('GET', '/api/status', headers={'Host': f'127.0.0.1:{self.port}'})
+        self.assertEqual(response.status, 200)
+
+    def test_post_rejected_without_token(self):
+        status = self._post_status('/api/settings', {'codex_enabled': False}, {})
+        self.assertEqual(status, 403)
+
+    def test_post_rejected_with_wrong_token(self):
+        status = self._post_status('/api/settings', {'codex_enabled': False}, {'X-AgentsPulse-Token': 'guessed'})
+        self.assertEqual(status, 403)
+
+    def test_post_rejected_with_cross_site_origin_despite_token(self):
+        headers = {'X-AgentsPulse-Token': self.server.token, 'Origin': 'https://attacker.example'}
+        status = self._post_status('/api/settings', {'codex_enabled': False}, headers)
+        self.assertEqual(status, 403)
+
+    def test_post_allowed_with_token_and_same_origin(self):
+        headers = {'X-AgentsPulse-Token': self.server.token, 'Origin': f'http://127.0.0.1:{self.port}'}
+        with patch('agentpulse.dashboard.save_dashboard_settings', return_value=(True, [], Path('settings.json'))):
+            status = self._post_status('/api/settings', {'codex_enabled': False}, headers)
+        self.assertEqual(status, 200)
+
+    def test_csrf_style_test_event_post_does_not_run_commands(self):
+        status = self._post_status('/api/test-event', {'event': 'threshold'}, {'Content-Type': 'text/plain'})
+        self.assertEqual(status, 403)
+        self.app.on_test_threshold_5h.assert_not_called()
+
+    def test_open_passes_session_token_in_url(self):
+        with patch('agentpulse.dashboard.webbrowser.open') as mock_open:
+            self.server.open()
+        opened_url = mock_open.call_args[0][0]
+        self.assertIn(f'?token={self.server.token}', opened_url)
+
+
+class TestHistoryPersistence(unittest.TestCase):
+    def setUp(self):
+        self.path = _temp_history_path(self)
+
+    def test_history_survives_restart(self):
+        history = DashboardHistory(path=self.path)
+        now = time.time()
+        history.record('claude', {'five_hour': {'utilization': 42, 'resets_at': '2026-01-01T00:00:00+00:00'}}, ts=now)
+        history.record('codex', {'error': 'failed'}, ts=now + 1)
+
+        restored = DashboardHistory(path=self.path)
+        rows = restored.rows('24h', now=now + 2)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]['provider'], 'claude')
+        self.assertEqual(rows[0]['utilization'], 42.0)
+        self.assertEqual(rows[1]['error'], 'failed')
+
+    def test_load_skips_corrupt_lines_and_compacts_file(self):
+        now = time.time()
+        valid = json.dumps({'ts': now, 'provider': 'claude', 'usage': {'five_hour': {'utilization': 10, 'resets_at': ''}}})
+        self.path.write_text(f'{valid}\nnot json\n{{"ts": "bad"}}\n', encoding='utf-8')
+
+        history = DashboardHistory(path=self.path)
+
+        self.assertEqual(len(history.rows('24h', now=now + 1)), 1)
+        self.assertEqual(len(self.path.read_text(encoding='utf-8').splitlines()), 1)
+
+    def test_load_prunes_entries_older_than_max_age(self):
+        now = time.time()
+        old = json.dumps({'ts': now - 40 * 24 * 3600, 'provider': 'claude', 'usage': {'five_hour': {'utilization': 1, 'resets_at': ''}}})
+        fresh = json.dumps({'ts': now, 'provider': 'claude', 'usage': {'five_hour': {'utilization': 2, 'resets_at': ''}}})
+        self.path.write_text(f'{old}\n{fresh}\n', encoding='utf-8')
+
+        history = DashboardHistory(path=self.path)
+        rows = history.rows('30d', now=now + 1)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['utilization'], 2.0)
+
+    def test_load_sanitizes_tampered_usage_entries(self):
+        now = time.time()
+        tampered = json.dumps({'ts': now, 'provider': 'claude', 'usage': {'five_hour': {'utilization': 'high', 'resets_at': ''}, 'seven_day': {'utilization': 7, 'resets_at': 123}}})
+        self.path.write_text(tampered + '\n', encoding='utf-8')
+
+        history = DashboardHistory(path=self.path)
+        rows = history.rows('24h', now=now + 1)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['field'], 'seven_day')
+        self.assertEqual(rows[0]['resets_at'], '')
+
+    def test_compaction_bounds_file_growth(self):
+        history = DashboardHistory(max_samples=2, path=self.path)
+        with patch('agentpulse.dashboard._HISTORY_COMPACT_SLACK', 3):
+            for index in range(20):
+                history.record('claude', {'five_hour': {'utilization': index, 'resets_at': ''}}, ts=time.time())
+
+        line_count = len(self.path.read_text(encoding='utf-8').splitlines())
+        self.assertLessEqual(line_count, 6)
+
+    def test_no_file_created_without_path(self):
+        history = DashboardHistory()
+        history.record('claude', {'five_hour': {'utilization': 5, 'resets_at': ''}}, ts=time.time())
+
+        self.assertIsNone(history.path)
+        self.assertFalse(self.path.exists())
+
+    def test_write_errors_do_not_break_recording(self):
+        history = DashboardHistory(path=self.path / 'missing-dir' / 'history.jsonl')
+        history.record('claude', {'five_hour': {'utilization': 5, 'resets_at': ''}}, ts=time.time())
+
+        self.assertEqual(len(history.rows('24h')), 1)
+
+
 class TestDashboardServer(unittest.TestCase):
     def test_start_uses_next_port_when_configured_port_is_busy(self):
         sock = socket.socket()
         sock.bind(('127.0.0.1', 0))
         sock.listen()
         busy_port = sock.getsockname()[1]
-        server = DashboardServer(MagicMock(), port=busy_port)
+        server = DashboardServer(MagicMock(), port=busy_port, history_path=_temp_history_path(self))
         try:
             url = server.start()
 
