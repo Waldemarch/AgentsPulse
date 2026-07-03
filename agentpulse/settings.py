@@ -15,7 +15,7 @@ __all__ = [
     'CODEX_ENABLED', 'CURRENCY_SYMBOL',
     'DASHBOARD_HOST', 'DASHBOARD_PORT',
     'FG', 'FG_DIM', 'FG_HEADING', 'FG_LINK',
-    'HEATMAP_ENABLED',
+    'HEATMAP_ENABLED', 'HISTORY_FILENAME', 'HISTORY_PERSIST',
     'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'IDLE_PAUSE',
     'LANGUAGE', 'LEGACY_SETTINGS_FILENAMES', 'MAX_BACKOFF',
     'ON_RESET_COMMAND', 'ON_THRESHOLD_COMMAND',
@@ -23,12 +23,13 @@ __all__ = [
     'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
     'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
-    'dashboard_settings', 'get_alert_thresholds', 'reload', 'save_dashboard_settings', 'settings_write_path',
+    'dashboard_settings', 'get_alert_thresholds', 'history_write_path', 'reload', 'save_dashboard_settings', 'settings_write_path',
     'EMAIL_DISPLAY', 'SHOW_INSTALL_SECTION',
 ]
 
 SETTINGS_FILENAME = 'agentpulse-settings.json'
 LEGACY_SETTINGS_FILENAMES = ('usage-monitor-settings.json',)
+HISTORY_FILENAME = 'agentpulse-history.jsonl'
 
 _MIN_INTS = {
     'poll_interval': 1,
@@ -39,7 +40,7 @@ _MIN_INTS = {
     'idle_pause': 0,
 }
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
-_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
+_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
 _TIMES = {'prediction_day_end_time', 'quiet_hours_start', 'quiet_hours_end'}
@@ -78,6 +79,10 @@ def _settings_search_dirs() -> list[Path]:
 
 def settings_write_path() -> Path:
     return _settings_search_dirs()[0] / SETTINGS_FILENAME
+
+
+def history_write_path() -> Path:
+    return _settings_search_dirs()[0] / HISTORY_FILENAME
 
 
 def _candidate_files() -> list[Path]:
@@ -362,6 +367,7 @@ IDLE_PAUSE = _S.get('idle_pause', 300)
 
 DASHBOARD_HOST = '127.0.0.1'
 DASHBOARD_PORT = 8766
+HISTORY_PERSIST = _S.get('history_persist', True)
 PREDICTION_ENABLED = _S.get('prediction_enabled', True)
 PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
 HEATMAP_ENABLED = _S.get('heatmap_enabled', True)

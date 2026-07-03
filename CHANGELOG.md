@@ -6,6 +6,7 @@
 
 - The tray icon now shows compact Claude and Codex 5-hour usage rows for at-a-glance taskbar monitoring.
 - The dashboard settings panel now includes a **Start with Windows** toggle, so autostart can be enabled without opening the tray menu. The change applies immediately, no restart needed.
+- Dashboard usage history is now saved to a local file (`agentpulse-history.jsonl`, quota percentages only - never tokens or account data) and survives application restarts. Set `history_persist` to `false` to keep history in memory only.
 
 ### Changed
 
@@ -15,5 +16,7 @@
 
 ### Fixed
 
+- The dashboard now rejects requests from web pages and forged hostnames: changing settings or firing test events requires a per-run session token and a same-origin browser context, closing a cross-site request forgery hole that could let a malicious website modify event commands. Reopen the dashboard from the tray menu if a saved bookmark stops accepting settings changes.
+- The dashboard's 7-day and 30-day history views no longer lose data on restart and can now hold a full 30 days of samples (the previous in-memory buffer filled up after roughly 12 days).
 - Popup settings (e.g. email blur/hide, the Claude Code versions toggle) no longer revert to old values after the popup is closed and reopened.
 - Extra-usage amounts now default to the euro symbol (`€`) instead of the system locale's currency, matching how Anthropic bills the credits. Override via `currency_symbol` if Anthropic bills you in a different currency.

@@ -27,7 +27,8 @@ Prioritize readability and auditability - users handle credentials and must be a
 - All URLs and API endpoints as top-level constants - no dynamic URL construction
 - Network communication exclusively with `api.anthropic.com` - no other destinations
 - Credentials used only in HTTP Authorization headers - never log, store, or transmit elsewhere
-- No file write operations - the app is read-only
+- File writes are limited to two app-owned files next to the executable: the settings file (dashboard/popup settings save) and the dashboard history file `agentpulse-history.jsonl` (sanitized quota snapshots only - never tokens, emails, or account identifiers). No other file writes
+- The dashboard's localhost bind is not a security boundary against browsers: every POST endpoint must require the per-run session token and a same-origin `Origin` header, and all requests must pass loopback `Host` validation (DNS rebinding). Never add a state-changing endpoint without these checks
 - No `eval()`, `exec()`, `compile()`, or dynamic imports - no dynamic code execution
 - No obfuscation - no base64-encoded strings, no encoded URLs or tokens
 - Modular package architecture in `agentpulse/` - small focused modules are easier to audit than one large file
