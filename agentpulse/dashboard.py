@@ -28,9 +28,10 @@ from . import __version__
 from .claude_cli import find_installations
 from .codex_cli import codex_version
 from .formatting import field_period, popup_label, time_until
+from .i18n import T
 from .settings import (
     DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST,
-    dashboard_settings, history_write_path, save_dashboard_settings, settings_write_path,
+    dashboard_settings, history_write_path, save_dashboard_settings,
 )
 
 if TYPE_CHECKING:
@@ -50,6 +51,15 @@ _RANGES = {
     '24h': 24 * 3600,
     '7d': 7 * 24 * 3600,
     '30d': 30 * 24 * 3600,
+}
+# Sent on every response. The dashboard loads only its own same-origin assets,
+# so a strict policy needs no exceptions.  ``no-referrer`` keeps the per-run
+# session token (passed in the open URL before the page strips it) out of any
+# Referer header; ``frame-ancestors``/``X-Frame-Options`` block clickjacking.
+_SECURITY_HEADERS = {
+    'Content-Security-Policy': "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
 }
 
 
@@ -342,6 +352,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         host = (self.headers.get('Host') or '').strip().lower()
         return host not in self.allowed_hosts
 
+    def _token_ok(self) -> bool:
+        """Return True when the request carries the valid per-run session token."""
+        if not self.dashboard_token:
+            return False
+        provided = self.headers.get('X-AgentsPulse-Token') or ''
+        return hmac.compare_digest(provided.encode('utf-8'), self.dashboard_token.encode('utf-8'))
+
     def _post_blocked(self) -> bool:
         """Reject cross-origin POSTs and requests without the session token (CSRF)."""
         if self._request_blocked():
@@ -349,10 +366,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         origin = (self.headers.get('Origin') or '').strip().lower()
         if origin and origin not in self.allowed_origins:
             return True
-        if not self.dashboard_token:
-            return True
-        provided = self.headers.get('X-AgentsPulse-Token') or ''
-        return not hmac.compare_digest(provided.encode('utf-8'), self.dashboard_token.encode('utf-8'))
+        return not self._token_ok()
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -369,6 +383,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._send_file(_DASHBOARD_DIR / 'dashboard.css')
         elif path == '/dashboard.js':
             self._send_file(_DASHBOARD_DIR / 'dashboard.js')
+        elif path == '/api/i18n':
+            self._send_json(_dashboard_i18n())
         elif path == '/api/status':
             self._send_json(_status_payload(self.dashboard_app))
         elif path == '/api/history':
@@ -382,13 +398,15 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 extra_headers={'Content-Disposition': f'attachment; filename="agentpulse-history-{range_name}.csv"'},
             )
         elif path == '/api/settings':
+            # Settings carry the user's configured event commands, so this read
+            # requires the session token (the filesystem path with the account
+            # username is intentionally never exposed here).
+            if not self._token_ok():
+                self.send_error(403)
+                return
             settings = dict(dashboard_settings())
             settings['autostart'] = _autostart_enabled()
-            self._send_json({
-                'settings': settings,
-                'path': str(settings_write_path()),
-                'restart_required': True,
-            })
+            self._send_json({'settings': settings})
         else:
             self.send_error(404)
 
@@ -441,6 +459,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('X-Content-Type-Options', 'nosniff')
+        for key, value in _SECURITY_HEADERS.items():
+            self.send_header(key, value)
         for key, value in (extra_headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -477,6 +497,36 @@ def _apply_autostart(value: object) -> list[str]:
     except OSError as exc:
         return [f'autostart: {exc}']
     return []
+
+
+def _dashboard_i18n() -> dict[str, str]:
+    """Return the translated strings the dashboard renders in the browser.
+
+    The dashboard is a static page served locally, so its text is localized
+    on the client: it fetches this map once and applies it to both the static
+    labels and the dynamically rendered widgets.  Reused keys (``usage``,
+    ``pace_healthy`` ...) share the same translations as the tray popup.
+    """
+    keys = [
+        'subtitle', 'range_24h', 'range_7d', 'range_30d', 'export_csv',
+        'usage_history', 'burn_rate', 'predictions', 'heatmap', 'diagnostics', 'settings',
+        'diag_sub', 'restart_required', 'pp_per_hour', 'heatmap_meta', 'day_target', 'rows',
+        'waiting', 'waiting_usage', 'waiting_enough', 'waiting_history', 'no_reset', 'not_detected',
+        'by_time', 'by_reset', 'ago',
+        'diag_app', 'diag_bind', 'diag_analytics', 'diag_tokens', 'diag_next_update',
+        'enabled', 'disabled', 'not_exposed', 'check_config', 'unknown', 'cli',
+        'codex_monitoring', 'quiet_hours', 'tooltip_fields',
+        'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
+        'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command',
+        'save_settings', 'test_reset', 'test_threshold',
+        'saved', 'error', 'session_expired', 'test_fired', 'test_failed', 'unknown_error',
+        'connection_lost',
+    ]
+    strings = {key: T[f'dash_{key}'] for key in keys}
+    strings['autostart'] = T['autostart']
+    strings['pace_healthy'] = T['pace_healthy']
+    strings['pace_ahead'] = T['pace_ahead']
+    return strings
 
 
 def _status_payload(app: AgentPulse) -> dict[str, Any]:

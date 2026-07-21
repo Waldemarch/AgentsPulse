@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from agentpulse.dashboard import DashboardHistory, DashboardServer, _apply_autostart, _autostart_enabled, _status_payload
+from agentpulse.dashboard import DashboardHistory, DashboardServer, _apply_autostart, _autostart_enabled, _dashboard_i18n, _status_payload
 
 
 def _fake_autostart_module(enabled: bool = False) -> types.ModuleType:
@@ -155,8 +155,10 @@ class TestSettingsEndpoint(unittest.TestCase):
         self.url = self.server.start()
         self.addCleanup(self.server.stop)
 
-    def _get_json(self, path):
-        with urllib.request.urlopen(self.url.rstrip('/') + path) as response:
+    def _get_json(self, path, *, token=None):
+        headers = {'X-AgentsPulse-Token': token if token is not None else self.server.token}
+        request = urllib.request.Request(self.url.rstrip('/') + path, headers=headers)
+        with urllib.request.urlopen(request) as response:
             return json.loads(response.read().decode('utf-8'))
 
     def _post_json(self, path, payload, *, token=None, origin=None):
@@ -178,6 +180,18 @@ class TestSettingsEndpoint(unittest.TestCase):
             data = self._get_json('/api/settings')
 
         self.assertTrue(data['settings']['autostart'])
+
+    def test_get_settings_does_not_expose_filesystem_path(self):
+        fake = _fake_autostart_module(enabled=True)
+        with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
+            data = self._get_json('/api/settings')
+
+        self.assertNotIn('path', data)
+
+    def test_get_settings_rejected_without_token(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get_json('/api/settings', token='')
+        self.assertEqual(ctx.exception.code, 403)
 
     def test_post_settings_applies_autostart_and_saves_remaining_keys(self):
         fake = _fake_autostart_module(enabled=False)
@@ -265,6 +279,20 @@ class TestRequestValidation(unittest.TestCase):
             self.server.open()
         opened_url = mock_open.call_args[0][0]
         self.assertIn(f'?token={self.server.token}', opened_url)
+
+    def test_responses_carry_security_headers(self):
+        response = self._raw_request('GET', '/api/status', headers={'Host': f'127.0.0.1:{self.port}'})
+        self.assertEqual(response.status, 200)
+        self.assertIn("default-src 'self'", response.getheader('Content-Security-Policy') or '')
+        self.assertEqual(response.getheader('X-Frame-Options'), 'DENY')
+        self.assertEqual(response.getheader('Referrer-Policy'), 'no-referrer')
+
+    def test_i18n_endpoint_returns_translations(self):
+        response = self._raw_request('GET', '/api/i18n', headers={'Host': f'127.0.0.1:{self.port}'})
+        self.assertEqual(response.status, 200)
+        payload = json.loads(response.read().decode('utf-8'))
+        self.assertIn('save_settings', payload)
+        self.assertTrue(all(payload.values()))
 
 
 class TestHistoryPersistence(unittest.TestCase):
@@ -357,6 +385,30 @@ class TestDashboardServer(unittest.TestCase):
         finally:
             server.stop()
             sock.close()
+
+
+class TestDashboardI18n(unittest.TestCase):
+    def test_returns_non_empty_strings_for_every_key(self):
+        strings = _dashboard_i18n()
+
+        self.assertTrue(strings)
+        for key, value in strings.items():
+            self.assertIsInstance(value, str, key)
+            self.assertNotEqual(value, '', key)
+
+    def test_exposes_reused_and_dashboard_keys(self):
+        strings = _dashboard_i18n()
+
+        self.assertIn('save_settings', strings)
+        self.assertIn('autostart', strings)
+        self.assertIn('pace_healthy', strings)
+
+    def test_placeholder_strings_keep_their_tokens(self):
+        strings = _dashboard_i18n()
+
+        self.assertIn('{path}', strings['saved'])
+        self.assertIn('{count}', strings['rows'])
+        self.assertIn('{range}', strings['rows'])
 
 
 if __name__ == '__main__':

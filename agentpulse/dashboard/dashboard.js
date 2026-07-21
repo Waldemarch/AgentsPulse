@@ -33,12 +33,41 @@ async function postJson(path, payload) {
         body: JSON.stringify(payload),
     });
     if (response.status === 403) {
-        return { ok: false, errors: ['session expired - reopen the dashboard from the tray menu'] };
+        return { ok: false, errors: [tr('session_expired', 'session expired - reopen the dashboard from the tray menu')] };
     }
     return response.json();
 }
 
 let state = { status: null, history: null, range: '24h' };
+
+// Localized strings fetched from /api/i18n; empty until loadI18n() resolves,
+// so every lookup falls back to the English text baked into the markup.
+let t = {};
+
+function tr(key, fallback) {
+    const value = t[key];
+    return value === undefined ? fallback : value;
+}
+
+function fmt(template, vars) {
+    return String(template).replace(/\{(\w+)\}/g, (match, name) => (name in vars ? vars[name] : match));
+}
+
+async function loadI18n() {
+    try {
+        t = await fetch('/api/i18n', { cache: 'no-store' }).then(r => r.json());
+    } catch {
+        t = {};
+    }
+    applyI18n();
+}
+
+function applyI18n() {
+    for (const el of document.querySelectorAll('[data-i18n]')) {
+        const value = t[el.dataset.i18n];
+        if (value !== undefined) el.textContent = value;
+    }
+}
 
 const rangeSelect = document.getElementById('rangeSelect');
 const exportCsv = document.getElementById('exportCsv');
@@ -49,17 +78,53 @@ rangeSelect.addEventListener('change', () => {
     refresh();
 });
 
+async function fetchJson(path) {
+    const response = await fetch(path, { cache: 'no-store' });
+    if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+    }
+    return response.json();
+}
+
+function setConnectionError(error) {
+    const banner = document.getElementById('connectionError');
+    if (!error) {
+        banner.hidden = true;
+        return;
+    }
+    const key = error.status === 403 ? 'session_expired' : 'connection_lost';
+    const fallback = error.status === 403
+        ? 'session expired - reopen the dashboard from the tray menu'
+        : 'Connection lost - retrying';
+    banner.textContent = tr(key, fallback);
+    banner.hidden = false;
+}
+
 async function refresh() {
-    const [status, history] = await Promise.all([
-        fetch('/api/status', { cache: 'no-store' }).then(r => r.json()),
-        fetch(`/api/history?range=${encodeURIComponent(state.range)}`, { cache: 'no-store' }).then(r => r.json()),
-    ]);
-    state = { ...state, status, history };
-    render();
+    try {
+        const [status, history] = await Promise.all([
+            fetchJson('/api/status'),
+            fetchJson(`/api/history?range=${encodeURIComponent(state.range)}`),
+        ]);
+        state = { ...state, status, history };
+        setConnectionError(null);
+        render();
+    } catch (error) {
+        setConnectionError(error);
+    }
 }
 
 async function loadSettings() {
-    const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
+    let data;
+    try {
+        const response = await fetch('/api/settings', { cache: 'no-store', headers: { 'X-AgentsPulse-Token': authToken } });
+        if (!response.ok) return;
+        data = await response.json();
+    } catch {
+        return;
+    }
     const s = data.settings || {};
     document.getElementById('autostartEnabled').checked = !!s.autostart;
     document.getElementById('codexEnabled').checked = !!s.codex_enabled;
@@ -79,13 +144,14 @@ async function loadSettings() {
 }
 
 function render() {
+    if (!state.status || !state.history) return;
     renderProviders(state.status.providers || []);
     renderDiagnostics(state.status);
     drawUsageChart(document.getElementById('usageChart'), state.history.rows || []);
     drawBurnChart(document.getElementById('burnChart'), state.history.rows || []);
     renderPredictions(state.status);
     renderHeatmap(state.history.rows || [], state.status.settings || {});
-    document.getElementById('historyMeta').textContent = `${state.history.rows.length} rows · ${state.range}`;
+    document.getElementById('historyMeta').textContent = fmt(tr('rows', '{count} rows · {range}'), { count: state.history.rows.length, range: state.range });
 }
 
 function renderProviders(providers) {
@@ -127,7 +193,7 @@ function providerCard(provider) {
     if (!provider.usage.length && !provider.error) {
         const empty = document.createElement('p');
         empty.className = 'muted';
-        empty.textContent = 'Waiting for usage data';
+        empty.textContent = tr('waiting_usage', 'Waiting for usage data');
         list.appendChild(empty);
     }
     card.appendChild(list);
@@ -135,9 +201,9 @@ function providerCard(provider) {
 }
 
 function metricSubtext(entry) {
-    const parts = [entry.reset_text || 'No reset time'];
+    const parts = [entry.reset_text || tr('no_reset', 'No reset time')];
     if (entry.burn) {
-        const pace = entry.burn.healthy ? 'on pace' : 'ahead of pace';
+        const pace = entry.burn.healthy ? tr('pace_healthy', 'on pace') : tr('pace_ahead', 'ahead of pace');
         if (entry.burn.eta_seconds) parts.push(`ETA ${formatCountdown(entry.burn.eta_seconds)}`);
         parts.push(`${Math.round(entry.burn.burn_per_hour * 10) / 10} pp/h`);
         parts.push(pace);
@@ -148,15 +214,15 @@ function metricSubtext(entry) {
 function renderDiagnostics(status) {
     const root = document.getElementById('diagnostics');
     const cards = [
-        ['App', `${status.app.name} ${status.app.version}`],
-        ['Dashboard bind', status.privacy.bind],
-        ['Analytics', status.privacy.analytics ? 'enabled' : 'disabled'],
-        ['Token payloads', status.privacy.token_free ? 'not exposed' : 'check configuration'],
-        ['Next update', status.next_poll_time ? formatCountdown(status.next_poll_time - Date.now() / 1000) : 'unknown'],
+        [tr('diag_app', 'App'), `${status.app.name} ${status.app.version}`],
+        [tr('diag_bind', 'Dashboard bind'), status.privacy.bind],
+        [tr('diag_analytics', 'Analytics'), status.privacy.analytics ? tr('enabled', 'enabled') : tr('disabled', 'disabled')],
+        [tr('diag_tokens', 'Token payloads'), status.privacy.token_free ? tr('not_exposed', 'not exposed') : tr('check_config', 'check configuration')],
+        [tr('diag_next_update', 'Next update'), status.next_poll_time ? formatCountdown(status.next_poll_time - Date.now() / 1000) : tr('unknown', 'unknown')],
     ];
     for (const provider of status.providers || []) {
-        const versions = (provider.installations || []).map(i => `${i.name} ${i.version}`).join(', ') || 'not detected';
-        cards.push([`${provider.label} CLI`, versions]);
+        const versions = (provider.installations || []).map(i => `${i.name} ${i.version}`).join(', ') || tr('not_detected', 'not detected');
+        cards.push([fmt(tr('cli', '{label} CLI'), { label: provider.label }), versions]);
     }
     root.replaceChildren(...cards.map(([k, v]) => {
         const div = document.createElement('div');
@@ -184,7 +250,7 @@ function drawBurnChart(canvas, rows) {
             points.push({ ...cur, burn: Math.max(-100, Math.min(100, (cur.utilization - prev.utilization) / hours)) });
         }
     }
-    document.getElementById('burnMeta').textContent = 'percentage points per hour';
+    document.getElementById('burnMeta').textContent = tr('pp_per_hour', 'percentage points per hour');
     drawLineChart(canvas, points, p => p.burn, p => `${p.provider}:${p.field}`, 'pp/h', { minY: -10, maxY: 60 });
 }
 
@@ -207,14 +273,14 @@ function renderPredictions(status) {
             const periodPct = Math.min(999, entry.utilization + entry.burn.burn_per_hour * resetHours);
             cards.push({
                 title: `${provider.label} ${entry.label}`,
-                day: `${Math.round(dayPct)}% by ${target}`,
-                period: `${Math.round(periodPct)}% by reset`,
+                day: fmt(tr('by_time', '{pct}% by {time}'), { pct: Math.round(dayPct), time: target }),
+                period: fmt(tr('by_reset', '{pct}% by reset'), { pct: Math.round(periodPct) }),
                 tone: dayPct >= 100 || periodPct >= 100 ? 'warn' : 'ok',
             });
         }
     }
 
-    document.getElementById('predictionMeta').textContent = `local day target ${target}`;
+    document.getElementById('predictionMeta').textContent = fmt(tr('day_target', 'local day target {target}'), { target });
     root.replaceChildren(...cards.map(card => {
         const div = document.createElement('div');
         div.className = `prediction ${card.tone}`;
@@ -228,7 +294,7 @@ function renderPredictions(status) {
     if (!cards.length) {
         const empty = document.createElement('p');
         empty.className = 'muted';
-        empty.textContent = 'Waiting for enough usage data';
+        empty.textContent = tr('waiting_enough', 'Waiting for enough usage data');
         root.replaceChildren(empty);
     }
 }
@@ -272,8 +338,8 @@ function renderHeatmap(rows, settings) {
             nodes.push(cell);
         }
     }
-    document.getElementById('heatmapMeta').textContent = 'positive usage deltas by local hour';
-    root.replaceChildren(...(nodes.length ? nodes : [emptyMuted('Waiting for history data')]));
+    document.getElementById('heatmapMeta').textContent = tr('heatmap_meta', 'positive usage deltas by local hour');
+    root.replaceChildren(...(nodes.length ? nodes : [emptyMuted(tr('waiting_history', 'Waiting for history data'))]));
 }
 
 function drawLineChart(canvas, points, getY, getKey, label, fixed = {}) {
@@ -302,7 +368,7 @@ function drawLineChart(canvas, points, getY, getKey, label, fixed = {}) {
     }
 
     if (!points.length) {
-        ctx.fillText('Waiting for history data', pad.l, h / 2);
+        ctx.fillText(tr('waiting_history', 'Waiting for history data'), pad.l, h / 2);
         return;
     }
 
@@ -352,8 +418,8 @@ function map(value, inMin, inMax, outMin, outMax) {
 }
 
 function formatUpdated(ts) {
-    if (!ts) return 'waiting';
-    return `${formatCountdown(Date.now() / 1000 - ts)} ago`;
+    if (!ts) return tr('waiting', 'waiting');
+    return fmt(tr('ago', '{duration} ago'), { duration: formatCountdown(Date.now() / 1000 - ts) });
 }
 
 function formatCountdown(seconds) {
@@ -420,8 +486,8 @@ document.getElementById('settingsForm').addEventListener('submit', async (event)
     };
     const result = await postJson('/api/settings', payload);
     document.getElementById('settingsStatus').textContent = result.ok
-        ? `saved to ${result.path}; restart required`
-        : `error: ${(result.errors || []).join(', ')}`;
+        ? fmt(tr('saved', 'saved to {path}; restart required'), { path: result.path })
+        : fmt(tr('error', 'error: {errors}'), { errors: (result.errors || []).join(', ') });
 });
 
 document.getElementById('testReset').addEventListener('click', () => testEvent('reset'));
@@ -430,10 +496,12 @@ document.getElementById('testThreshold').addEventListener('click', () => testEve
 async function testEvent(event) {
     const result = await postJson('/api/test-event', { event });
     document.getElementById('settingsStatus').textContent = result.ok
-        ? `test ${event} fired`
-        : `test failed: ${(result.errors || []).join(', ') || 'unknown error'}`;
+        ? fmt(tr('test_fired', 'test {event} fired'), { event })
+        : fmt(tr('test_failed', 'test failed: {errors}'), { errors: (result.errors || []).join(', ') || tr('unknown_error', 'unknown error') });
 }
 
-refresh();
-loadSettings();
+loadI18n().then(() => {
+    refresh();
+    loadSettings();
+});
 setInterval(refresh, 15000);

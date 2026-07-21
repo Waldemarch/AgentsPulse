@@ -31,7 +31,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Visual quality
 
-- **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme and has a settings panel for configuring alerts, autostart, and display options.
+- **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme, is shown in your language, and has a settings panel for configuring alerts, autostart, and display options.
 
 ### Reliability
 
@@ -40,7 +40,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Reach and preferences
 
-- **13 languages** - English, German, Spanish, French, Hindi, Indonesian, Italian, Japanese, Korean, Portuguese (Brazil), Ukrainian, Simplified Chinese, Traditional Chinese. Language is auto-detected from your system locale.
+- **13 languages** - English, German, Spanish, French, Hindi, Indonesian, Italian, Japanese, Korean, Portuguese (Brazil), Ukrainian, Simplified Chinese, Traditional Chinese, across the tray, popup, and dashboard. Language is auto-detected from your system locale.
 - **Codex support** - tracks OpenAI Codex usage alongside Claude when a Codex CLI token is present.
 - **Customizable** - adjust polling intervals, alert thresholds, popup colors, which quota fields appear in the icon and tooltip, and more via a JSON settings file or the dashboard settings panel.
 
@@ -112,6 +112,6 @@ python -m unittest discover -s tests
 
 - Network traffic is limited to `api.anthropic.com` (Claude usage) and `chatgpt.com` (Codex usage, only when a token is present). No telemetry, no analytics.
 - Credentials are read from the Claude Code and Codex CLI login state on your machine and used only in HTTP Authorization headers. They are never logged, stored elsewhere, or transmitted to any other destination.
-- The dashboard runs on `localhost` only and is not exposed on the network.
+- The dashboard runs on `localhost` only and is not exposed on the network. It rejects requests from other websites and forged hostnames, sends strict security headers (Content-Security-Policy, X-Frame-Options, Referrer-Policy), requires a per-run session token to read settings or change anything, and never reveals filesystem paths.
 - The app never writes files (it is read-only). Settings are only written when you explicitly save from the dashboard or create the settings file manually.
 - All URLs and API endpoints are defined as top-level constants in the source - no dynamic URL construction.

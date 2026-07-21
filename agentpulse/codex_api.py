@@ -16,6 +16,8 @@ from __future__ import annotations
 import http.cookiejar
 import json
 import os
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -28,6 +30,13 @@ from .i18n import T
 # request that must be echoed back on subsequent requests.
 _cookie_jar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookie_jar))
+
+# The usage endpoint returns both quota and profile fields in one payload, so
+# usage and profile reads that happen back-to-back (startup, popup refresh)
+# share a single round-trip instead of hitting this rate-limited endpoint twice.
+_RAW_CACHE_TTL = 5.0
+_raw_cache_lock = threading.Lock()
+_raw_cache: dict[str, Any] = {'ts': 0.0, 'token': None, 'body': None}
 
 __all__ = [
     'API_URL_USAGE', 'CODEX_CONFIG_DIR', 'CODEX_AUTH_FILE',
@@ -68,52 +77,72 @@ def api_headers() -> dict[str, str] | None:
 
 def fetch_usage() -> dict[str, Any]:
     """Fetch usage data from the Codex usage API and normalize it to Claude-compatible format."""
+    body, error = _request_usage()
+    if error is not None:
+        return error
+    return _normalize_usage(body or {})
+
+
+def fetch_profile() -> dict[str, Any] | None:
+    """Return the Codex account profile embedded in the usage endpoint response."""
+    body, error = _request_usage()
+    if error is not None or body is None:
+        return None
+    return {
+        'account': {'email': body.get('email', '')},
+        'organization': {'organization_type': body.get('plan_type', '')},
+    }
+
+
+def _request_usage() -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Return the raw usage payload and an error dict, exactly one of which is set.
+
+    A fresh payload is reused for ``_RAW_CACHE_TTL`` seconds so that a usage and
+    profile read issued back-to-back only make one request to the endpoint.
+    """
     headers = api_headers()
     if not headers:
-        return {'error': T.get('codex_no_token', 'No Codex token. Log in to Codex CLI first.')}
+        return None, {'error': T.get('codex_no_token', 'No Codex token. Log in to Codex CLI first.')}
+
+    token = headers['Authorization']
+    now = time.time()
+    with _raw_cache_lock:
+        if _raw_cache['body'] is not None and _raw_cache['token'] == token and now - _raw_cache['ts'] < _RAW_CACHE_TTL:
+            return _raw_cache['body'], None
 
     try:
         req = urllib.request.Request(API_URL_USAGE, headers=headers)
         with _opener.open(req, timeout=10) as resp:
             body = json.loads(resp.read().decode('utf-8'))
-            return _normalize_usage(body)
     except urllib.error.HTTPError as e:
-        code = e.code
-        if code == 401:
-            return {
-                'error': T.get('codex_auth_expired', 'Codex session expired - please open Codex CLI to log in again.'),
-                'auth_error': True,
-            }
-        if code == 429:
-            extra: dict[str, Any] = {}
-            retry = _parse_retry_after(e)
-            if retry is not None:
-                extra['retry_after'] = retry
-            return {**extra, 'error': T['http_error'].format(code=429), 'rate_limited': True}
-        if 500 <= code < 600:
-            return {'error': T['server_error'].format(code=code)}
-        return {'error': T['http_error'].format(code=code)}
+        return None, _http_error(e)
     except urllib.error.URLError:
-        return {'error': T.get('codex_connection_error', 'Could not connect to OpenAI API.')}
+        return None, {'error': T.get('codex_connection_error', 'Could not connect to OpenAI API.')}
     except Exception:
-        return {'error': T.get('codex_connection_error', 'Could not connect to OpenAI API.')}
+        return None, {'error': T.get('codex_connection_error', 'Could not connect to OpenAI API.')}
+
+    with _raw_cache_lock:
+        _raw_cache.update(ts=time.time(), token=token, body=body)
+    return body, None
 
 
-def fetch_profile() -> dict[str, Any] | None:
-    """Fetch Codex account profile embedded in the usage endpoint response."""
-    headers = api_headers()
-    if not headers:
-        return None
-    try:
-        req = urllib.request.Request(API_URL_USAGE, headers=headers)
-        with _opener.open(req, timeout=10) as resp:
-            raw = json.loads(resp.read().decode('utf-8'))
-            return {
-                'account': {'email': raw.get('email', '')},
-                'organization': {'organization_type': raw.get('plan_type', '')},
-            }
-    except Exception:
-        return None
+def _http_error(error: urllib.error.HTTPError) -> dict[str, Any]:
+    """Map an HTTP error from the usage endpoint to a normalized error dict."""
+    code = error.code
+    if code == 401:
+        return {
+            'error': T.get('codex_auth_expired', 'Codex session expired - please open Codex CLI to log in again.'),
+            'auth_error': True,
+        }
+    if code == 429:
+        extra: dict[str, Any] = {}
+        retry = _parse_retry_after(error)
+        if retry is not None:
+            extra['retry_after'] = retry
+        return {**extra, 'error': T['http_error'].format(code=429), 'rate_limited': True}
+    if 500 <= code < 600:
+        return {'error': T['server_error'].format(code=code)}
+    return {'error': T['http_error'].format(code=code)}
 
 
 # Helpers
