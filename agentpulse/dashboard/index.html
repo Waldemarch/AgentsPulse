@@ -12,25 +12,26 @@
         <span class="brand-mark" aria-hidden="true"></span>
         <div>
             <h1>Agents Pulse</h1>
-            <p id="subtitle">Local usage dashboard</p>
+            <p id="subtitle" data-i18n="subtitle">Local usage dashboard</p>
         </div>
     </div>
     <div class="actions">
         <select id="rangeSelect" aria-label="History range">
-            <option value="24h">Last 24h</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
+            <option value="24h" data-i18n="range_24h">Last 24h</option>
+            <option value="7d" data-i18n="range_7d">Last 7 days</option>
+            <option value="30d" data-i18n="range_30d">Last 30 days</option>
         </select>
-        <a id="exportCsv" href="/api/history.csv?range=24h">Export CSV</a>
+        <a id="exportCsv" href="/api/history.csv?range=24h" data-i18n="export_csv">Export CSV</a>
     </div>
 </header>
 
 <main>
+    <p id="connectionError" class="error" role="alert" hidden></p>
     <section id="providers" class="provider-grid"></section>
 
     <section class="card">
         <div class="section-head">
-            <h2>Usage History</h2>
+            <h2 data-i18n="usage_history">Usage History</h2>
             <span id="historyMeta"></span>
         </div>
         <canvas id="usageChart" height="260"></canvas>
@@ -38,7 +39,7 @@
 
     <section class="card">
         <div class="section-head">
-            <h2>Burn Rate</h2>
+            <h2 data-i18n="burn_rate">Burn Rate</h2>
             <span id="burnMeta"></span>
         </div>
         <canvas id="burnChart" height="220"></canvas>
@@ -46,7 +47,7 @@
 
     <section id="predictionSection" class="card">
         <div class="section-head">
-            <h2>Predictions</h2>
+            <h2 data-i18n="predictions">Predictions</h2>
             <span id="predictionMeta"></span>
         </div>
         <div id="predictions" class="prediction-grid"></div>
@@ -54,7 +55,7 @@
 
     <section id="heatmapSection" class="card">
         <div class="section-head">
-            <h2>Usage Heatmap</h2>
+            <h2 data-i18n="heatmap">Usage Heatmap</h2>
             <span id="heatmapMeta"></span>
         </div>
         <div id="heatmap" class="heatmap"></div>
@@ -62,37 +63,37 @@
 
     <section class="card">
         <div class="section-head">
-            <h2>Diagnostics</h2>
-            <span>localhost only, token-free payloads</span>
+            <h2 data-i18n="diagnostics">Diagnostics</h2>
+            <span data-i18n="diag_sub">localhost only, token-free payloads</span>
         </div>
         <div id="diagnostics" class="diagnostics"></div>
     </section>
 
     <section class="card">
         <div class="section-head">
-            <h2>Settings</h2>
-            <span id="settingsStatus">restart required after save</span>
+            <h2 data-i18n="settings">Settings</h2>
+            <span id="settingsStatus" data-i18n="restart_required">restart required after save</span>
         </div>
         <form id="settingsForm" class="settings-grid">
-            <label class="toggle"><span>Start with Windows</span><input id="autostartEnabled" type="checkbox"></label>
-            <label class="toggle"><span>Codex monitoring</span><input id="codexEnabled" type="checkbox"></label>
-            <label class="toggle"><span>Predictions</span><input id="predictionEnabled" type="checkbox"></label>
-            <label class="toggle"><span>Heatmap</span><input id="heatmapEnabled" type="checkbox"></label>
-            <label class="toggle"><span>Quiet hours</span><input id="quietHoursEnabled" type="checkbox"></label>
-            <label><span>Tooltip fields</span><input id="tooltipFields" type="text"></label>
-            <label><span>Claude 5h thresholds</span><input id="thresholdClaude5h" type="text"></label>
-            <label><span>Claude 7d thresholds</span><input id="thresholdClaude7d" type="text"></label>
-            <label><span>Codex 5h thresholds</span><input id="thresholdCodex5h" type="text"></label>
-            <label><span>Codex 7d thresholds</span><input id="thresholdCodex7d" type="text"></label>
-            <label><span>Predict day until</span><input id="predictionDayEnd" type="time"></label>
-            <label><span>Quiet starts</span><input id="quietHoursStart" type="time"></label>
-            <label><span>Quiet ends</span><input id="quietHoursEnd" type="time"></label>
-            <label><span>Reset command</span><input id="resetCommand" type="text"></label>
-            <label><span>Threshold command</span><input id="thresholdCommand" type="text"></label>
+            <label class="toggle"><span data-i18n="autostart">Start with Windows</span><input id="autostartEnabled" type="checkbox"></label>
+            <label class="toggle"><span data-i18n="codex_monitoring">Codex monitoring</span><input id="codexEnabled" type="checkbox"></label>
+            <label class="toggle"><span data-i18n="predictions">Predictions</span><input id="predictionEnabled" type="checkbox"></label>
+            <label class="toggle"><span data-i18n="heatmap">Heatmap</span><input id="heatmapEnabled" type="checkbox"></label>
+            <label class="toggle"><span data-i18n="quiet_hours">Quiet hours</span><input id="quietHoursEnabled" type="checkbox"></label>
+            <label><span data-i18n="tooltip_fields">Tooltip fields</span><input id="tooltipFields" type="text"></label>
+            <label><span data-i18n="thr_claude_5h">Claude 5h thresholds</span><input id="thresholdClaude5h" type="text"></label>
+            <label><span data-i18n="thr_claude_7d">Claude 7d thresholds</span><input id="thresholdClaude7d" type="text"></label>
+            <label><span data-i18n="thr_codex_5h">Codex 5h thresholds</span><input id="thresholdCodex5h" type="text"></label>
+            <label><span data-i18n="thr_codex_7d">Codex 7d thresholds</span><input id="thresholdCodex7d" type="text"></label>
+            <label><span data-i18n="predict_until">Predict day until</span><input id="predictionDayEnd" type="time"></label>
+            <label><span data-i18n="quiet_starts">Quiet starts</span><input id="quietHoursStart" type="time"></label>
+            <label><span data-i18n="quiet_ends">Quiet ends</span><input id="quietHoursEnd" type="time"></label>
+            <label><span data-i18n="reset_command">Reset command</span><input id="resetCommand" type="text"></label>
+            <label><span data-i18n="threshold_command">Threshold command</span><input id="thresholdCommand" type="text"></label>
             <div class="settings-actions">
-                <button type="submit" class="primary">Save Settings</button>
-                <button type="button" id="testReset">Test Reset</button>
-                <button type="button" id="testThreshold">Test Threshold</button>
+                <button type="submit" class="primary" data-i18n="save_settings">Save Settings</button>
+                <button type="button" id="testReset" data-i18n="test_reset">Test Reset</button>
+                <button type="button" id="testThreshold" data-i18n="test_threshold">Test Threshold</button>
             </div>
         </form>
     </section>

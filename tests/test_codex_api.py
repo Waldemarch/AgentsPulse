@@ -9,10 +9,15 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import agentpulse.codex_api as codex_api
 from agentpulse.codex_api import (
     _normalize_usage, _unix_to_iso, _parse_retry_after,
     fetch_profile, fetch_usage, read_access_token,
 )
+
+
+def _reset_raw_cache() -> None:
+    codex_api._raw_cache.update(ts=0.0, token=None, body=None)
 
 
 class TestReadAccessToken(unittest.TestCase):
@@ -98,6 +103,10 @@ class TestUnixToIso(unittest.TestCase):
 
 
 class TestFetchUsageErrors(unittest.TestCase):
+    def setUp(self):
+        _reset_raw_cache()
+        self.addCleanup(_reset_raw_cache)
+
     def _make_http_error(self, code, headers=None):
         msg = HTTPMessage()
         if headers:
@@ -166,6 +175,46 @@ class TestFetchUsageErrors(unittest.TestCase):
         self.assertNotIn('error', result)
         self.assertEqual(result['five_hour']['utilization'], 50.0)
         self.assertEqual(result['seven_day']['utilization'], 10.0)
+
+
+class TestRequestDeduplication(unittest.TestCase):
+    def setUp(self):
+        _reset_raw_cache()
+        self.addCleanup(_reset_raw_cache)
+
+    def _mock_response(self, raw):
+        resp = MagicMock()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        resp.read.return_value = json.dumps(raw).encode()
+        return resp
+
+    def test_usage_then_profile_share_one_request(self):
+        raw = {
+            'email': 'a@b.com', 'plan_type': 'plus',
+            'rate_limit': {'primary_window': {'used_percent': 50, 'reset_at': 1700000000}},
+        }
+        with patch('agentpulse.codex_api.read_access_token', return_value='tok'):
+            with patch('agentpulse.codex_api._opener') as mock_opener:
+                mock_opener.open.return_value = self._mock_response(raw)
+                usage = fetch_usage()
+                profile = fetch_profile()
+
+        self.assertEqual(mock_opener.open.call_count, 1)
+        self.assertEqual(usage['five_hour']['utilization'], 50.0)
+        self.assertEqual(profile['account']['email'], 'a@b.com')
+        self.assertEqual(profile['organization']['organization_type'], 'plus')
+
+    def test_expired_cache_triggers_new_request(self):
+        raw = {'rate_limit': {'primary_window': {'used_percent': 5, 'reset_at': 1700000000}}}
+        with patch('agentpulse.codex_api.read_access_token', return_value='tok'):
+            with patch('agentpulse.codex_api._opener') as mock_opener:
+                mock_opener.open.return_value = self._mock_response(raw)
+                fetch_usage()
+                codex_api._raw_cache['ts'] = 0.0
+                fetch_usage()
+
+        self.assertEqual(mock_opener.open.call_count, 2)
 
 
 class TestParseRetryAfter(unittest.TestCase):
