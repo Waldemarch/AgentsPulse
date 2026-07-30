@@ -14,7 +14,15 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from agentpulse.dashboard import DashboardHistory, DashboardServer, _apply_autostart, _autostart_enabled, _dashboard_i18n, _status_payload
+from agentpulse.dashboard import (
+    _SECONDARY_CLI_VERSIONS, DashboardHistory, DashboardServer,
+    _apply_autostart, _autostart_enabled, _dashboard_i18n, _status_payload,
+)
+
+
+def _no_cli_versions():
+    """Report no installed CLI for every non-Claude provider."""
+    return {name: (lambda: '') for name in _SECONDARY_CLI_VERSIONS}
 
 
 def _fake_autostart_module(enabled: bool = False) -> types.ModuleType:
@@ -80,7 +88,7 @@ class TestStatusPayload(unittest.TestCase):
 
         app = MagicMock()
         app.cache.snapshot = snap
-        app.codex_cache = None
+        app._secondary_caches.return_value = []
         app._next_poll_time = 1200
 
         with patch('agentpulse.dashboard.find_installations', return_value=[]):
@@ -90,6 +98,63 @@ class TestStatusPayload(unittest.TestCase):
         self.assertNotIn('profile', payload['providers'][0])
         self.assertNotIn('access_token', str(payload).lower())
         self.assertEqual(payload['providers'][0]['usage'][0]['utilization'], 50.0)
+
+    def _app_with_providers(self, *provider_names):
+        snap = MagicMock()
+        snap.usage = {'five_hour': {'utilization': 50, 'resets_at': ''}}
+        snap.last_success_time = 1000
+        snap.refreshing = False
+        snap.last_error = None
+
+        app = MagicMock()
+        app.cache.snapshot = snap
+        app._next_poll_time = 1200
+        caches = []
+        for name in provider_names:
+            cache = MagicMock()
+            cache.snapshot = snap
+            caches.append((name, cache))
+        app._secondary_caches.return_value = caches
+        return app
+
+    def test_only_claude_when_no_other_provider_is_active(self):
+        app = self._app_with_providers()
+        with patch('agentpulse.dashboard.find_installations', return_value=[]):
+            payload = _status_payload(app)
+
+        self.assertEqual([entry['id'] for entry in payload['providers']], ['claude'])
+
+    def test_active_providers_follow_claude_in_order(self):
+        app = self._app_with_providers('codex', 'kimi')
+        with patch('agentpulse.dashboard.find_installations', return_value=[]), \
+             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+            payload = _status_payload(app)
+
+        self.assertEqual([entry['id'] for entry in payload['providers']], ['claude', 'codex', 'kimi'])
+
+    def test_provider_labels_are_display_names(self):
+        app = self._app_with_providers('codex', 'kimi')
+        with patch('agentpulse.dashboard.find_installations', return_value=[]), \
+             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+            payload = _status_payload(app)
+
+        self.assertEqual([entry['label'] for entry in payload['providers']], ['Claude', 'Codex', 'Kimi'])
+
+    def test_cli_version_reported_per_provider(self):
+        app = self._app_with_providers('kimi')
+        with patch('agentpulse.dashboard.find_installations', return_value=[]), \
+             patch.dict(_SECONDARY_CLI_VERSIONS, {'kimi': lambda: '2.0.1'}):
+            payload = _status_payload(app)
+
+        self.assertEqual(payload['providers'][1]['installations'], [{'name': 'CLI', 'version': '2.0.1'}])
+
+    def test_missing_cli_version_yields_no_installation_rows(self):
+        app = self._app_with_providers('kimi')
+        with patch('agentpulse.dashboard.find_installations', return_value=[]), \
+             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+            payload = _status_payload(app)
+
+        self.assertEqual(payload['providers'][1]['installations'], [])
 
 
 class TestAutostartHelpers(unittest.TestCase):
@@ -225,7 +290,7 @@ class TestRequestValidation(unittest.TestCase):
         snap.last_error = None
         self.app = MagicMock()
         self.app.cache.snapshot = snap
-        self.app.codex_cache = None
+        self.app._secondary_caches.return_value = []
         self.app._next_poll_time = None
         self.server = DashboardServer(self.app, port=0, history_path=_temp_history_path(self))
         self.url = self.server.start()
@@ -402,6 +467,13 @@ class TestDashboardI18n(unittest.TestCase):
         self.assertIn('save_settings', strings)
         self.assertIn('autostart', strings)
         self.assertIn('pace_healthy', strings)
+
+    def test_exposes_every_provider_settings_key(self):
+        """Each provider's dashboard controls have a translated label."""
+        strings = _dashboard_i18n()
+
+        for key in ('codex_monitoring', 'kimi_monitoring', 'thr_codex_5h', 'thr_codex_7d', 'thr_kimi_5h', 'thr_kimi_7d'):
+            self.assertIn(key, strings)
 
     def test_placeholder_strings_keep_their_tokens(self):
         strings = _dashboard_i18n()

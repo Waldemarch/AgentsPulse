@@ -29,6 +29,7 @@ def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
     with patch('agentpulse.app.pystray'), \
          patch('agentpulse.app.create_icon_image'), \
          patch('agentpulse.app.read_codex_access_token', return_value=None), \
+         patch('agentpulse.app.read_kimi_access_token', return_value=None), \
          patch('agentpulse.app.taskbar_uses_light_theme', return_value=False):
         app = AgentPulse()
     app.icon = MagicMock()
@@ -54,10 +55,47 @@ class TestInitialization(unittest.TestCase):
         with patch('agentpulse.app.pystray'), \
              patch('agentpulse.app.create_icon_image'), \
              patch('agentpulse.app.taskbar_uses_light_theme', return_value=False), \
-             patch('agentpulse.app.read_codex_access_token', return_value=None):
+             patch('agentpulse.app.read_codex_access_token', return_value=None), \
+             patch('agentpulse.app.read_kimi_access_token', return_value=None):
             app = AgentPulse()
 
         self.assertIsNone(app.codex_cache)
+
+    def test_kimi_cache_hidden_without_token(self):
+        """Kimi provider is not created when no Kimi Code CLI token exists."""
+        with patch('agentpulse.app.pystray'), \
+             patch('agentpulse.app.create_icon_image'), \
+             patch('agentpulse.app.taskbar_uses_light_theme', return_value=False), \
+             patch('agentpulse.app.read_codex_access_token', return_value=None), \
+             patch('agentpulse.app.read_kimi_access_token', return_value=None):
+            app = AgentPulse()
+
+        self.assertIsNone(app.kimi_cache)
+
+    def test_kimi_cache_created_with_token(self):
+        """Kimi provider is created when Kimi monitoring is enabled and a token exists."""
+        with patch('agentpulse.app.pystray'), \
+             patch('agentpulse.app.create_icon_image'), \
+             patch('agentpulse.app.taskbar_uses_light_theme', return_value=False), \
+             patch('agentpulse.app.read_codex_access_token', return_value=None), \
+             patch('agentpulse.app.read_kimi_access_token', return_value='tok'), \
+             patch('agentpulse.app.KIMI_ENABLED', True):
+            app = AgentPulse()
+
+        self.assertIsNotNone(app.kimi_cache)
+
+    def test_secondary_caches_listed_in_display_order(self):
+        """Active non-Claude providers are reported Codex first, then Kimi."""
+        with patch('agentpulse.app.pystray'), \
+             patch('agentpulse.app.create_icon_image'), \
+             patch('agentpulse.app.taskbar_uses_light_theme', return_value=False), \
+             patch('agentpulse.app.read_codex_access_token', return_value='tok'), \
+             patch('agentpulse.app.read_kimi_access_token', return_value='tok'), \
+             patch('agentpulse.app.CODEX_ENABLED', True), \
+             patch('agentpulse.app.KIMI_ENABLED', True):
+            app = AgentPulse()
+
+        self.assertEqual([name for name, _cache in app._secondary_caches()], ['codex', 'kimi'])
 
     def test_codex_cache_created_with_token(self):
         """Codex provider is created when Codex monitoring is enabled and a token exists."""
@@ -65,6 +103,7 @@ class TestInitialization(unittest.TestCase):
              patch('agentpulse.app.create_icon_image'), \
              patch('agentpulse.app.taskbar_uses_light_theme', return_value=False), \
              patch('agentpulse.app.read_codex_access_token', return_value='tok'), \
+             patch('agentpulse.app.read_kimi_access_token', return_value=None), \
              patch('agentpulse.app.CODEX_ENABLED', True):
             app = AgentPulse()
 
@@ -282,6 +321,15 @@ class TestCheckThresholdAlerts(unittest.TestCase):
         self.app._check_threshold_alerts({'five_hour': {'utilization': 82}})
 
         self.app.icon.notify.assert_called_once()
+
+    def test_kimi_threshold_does_not_suppress_codex(self):
+        """Each provider keeps its own threshold state, so alerts do not cross-suppress."""
+        self.app.icon = MagicMock()
+        self.app._check_threshold_alerts({'five_hour': {'utilization': 82}}, provider='codex')
+        self.app._check_threshold_alerts({'five_hour': {'utilization': 82}}, provider='kimi')
+
+        self.assertEqual(self.app._notified_thresholds.get('codex:five_hour'), 80)
+        self.assertEqual(self.app._notified_thresholds.get('kimi:five_hour'), 80)
 
     def test_codex_threshold_uses_provider_state_key(self):
         """Codex thresholds are tracked separately from Claude thresholds."""
@@ -931,7 +979,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day': {'utilization': 10.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(42.0, 10.0, light_taskbar=False)
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False)
         self.assertEqual(self.app.icon.title, 'Usage: 42%')
 
     @patch('agentpulse.app.format_tooltip', return_value='Error')
@@ -959,20 +1007,20 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {}, 'seven_day': {'utilization': None}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, 0, light_taskbar=False)
+        mock_icon.assert_called_once_with([0], light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_custom_icon_fields_do_not_change_tray_rows(self, mock_icon, _tooltip):
-        """Tray icon always shows Claude five-hour usage over the fallback row."""
+        """Tray rings always show five-hour usage, whatever icon_fields says."""
         self.app._last_response = {
             'five_hour': {'utilization': 30.0},
             'seven_day_sonnet': {'utilization': 75.0},
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(30.0, 0, light_taskbar=False)
+        mock_icon.assert_called_once_with([30.0], light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -982,27 +1030,71 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'seven_day': {'utilization': 42.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(0, 42.0, light_taskbar=False)
+        mock_icon.assert_called_once_with([0], light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_non_five_hour_null_in_response_is_ignored(self, mock_icon, _tooltip):
-        """Only available session and fallback rows are used for the tray icon."""
+        """A null quota field is ignored when building the tray rings."""
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day_sonnet': None}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(42.0, 0, light_taskbar=False)
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False)
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    def test_codex_five_hour_renders_as_bottom_row(self, mock_icon, _tooltip):
-        """Codex five-hour usage is shown as the second tray row."""
+    def test_codex_five_hour_renders_as_second_ring(self, mock_icon, _tooltip):
+        """Codex five-hour usage is shown as the second tray ring."""
+        self.app.codex_cache = MagicMock()
         self.app._last_response = {'five_hour': {'utilization': 55.0}}
-        self.app._last_codex_response = {'five_hour': {'utilization': 70.0}}
+        self.app._secondary_responses = {'codex': {'five_hour': {'utilization': 70.0}}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with(55.0, 70.0, light_taskbar=False)
+        mock_icon.assert_called_once_with([55.0, 70.0], light_taskbar=False)
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    def test_kimi_five_hour_renders_as_third_ring(self, mock_icon, _tooltip):
+        """Kimi five-hour usage is shown as the third tray ring."""
+        self.app.codex_cache = MagicMock()
+        self.app.kimi_cache = MagicMock()
+        self.app._last_response = {'five_hour': {'utilization': 55.0}}
+        self.app._secondary_responses = {
+            'codex': {'five_hour': {'utilization': 70.0}},
+            'kimi': {'five_hour': {'utilization': 12.0}},
+        }
+        self.app._render_tray()
+
+        mock_icon.assert_called_once_with([55.0, 70.0, 12.0], light_taskbar=False)
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    def test_failing_provider_contributes_no_ring(self, mock_icon, _tooltip):
+        """A provider whose fetch failed is left out of the ring list."""
+        self.app.codex_cache = MagicMock()
+        self.app.kimi_cache = MagicMock()
+        self.app._last_response = {'five_hour': {'utilization': 55.0}}
+        self.app._secondary_responses = {
+            'codex': {'error': 'boom'},
+            'kimi': {'five_hour': {'utilization': 12.0}},
+        }
+        self.app._render_tray()
+
+        mock_icon.assert_called_once_with([55.0, 12.0], light_taskbar=False)
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_status_image')
+    def test_claude_error_with_healthy_secondary_skips_status_icon(self, mock_status, _tooltip):
+        """A Claude error alone does not replace the rings while Kimi has data."""
+        self.app.kimi_cache = MagicMock()
+        self.app._last_response = {'error': 'server down'}
+        self.app._secondary_responses = {'kimi': {'five_hour': {'utilization': 12.0}}}
+        with patch('agentpulse.app.create_icon_image') as mock_icon:
+            self.app._render_tray()
+
+        mock_status.assert_not_called()
+        mock_icon.assert_called_once_with([0, 12.0], light_taskbar=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1029,7 +1121,7 @@ class TestOnThemeChanged(unittest.TestCase):
         self.app._on_theme_changed()
 
         self.assertTrue(self.app._light_taskbar)
-        mock_icon.assert_called_once_with(50.0, 20.0, light_taskbar=True)
+        mock_icon.assert_called_once_with([50.0], light_taskbar=True)
 
     @patch('agentpulse.app.taskbar_uses_light_theme', return_value=False)
     def test_same_theme_no_render(self, _theme):
@@ -1847,9 +1939,9 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
         self.app.cache = MagicMock()
         self.app.cache.ensure_profile = MagicMock()
         self.app.cache.last_success_time = 0.0
-        # Prevent real HTTP calls from codex_cache from consuming mocked time.time() values
-        if self.app.codex_cache is not None:
-            self.app.codex_cache = MagicMock()
+        # Prevent real HTTP calls from the secondary providers from consuming mocked time.time() values
+        for name, _cache in self.app._secondary_caches():
+            setattr(self.app, f'{name}_cache', MagicMock())
 
     def tearDown(self):
         _cleanup(self.app)

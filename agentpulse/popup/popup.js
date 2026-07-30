@@ -1,6 +1,9 @@
 let nodes = {};
 let strings = {};
-let providers = { claude: null, codex: null };
+let providers = {};
+let providerOrder = [];
+let providerLabels = {};
+let providerInstallTitles = {};
 let selectedTab = 'all';
 let statusTimer = null;
 let statusModel = {};
@@ -15,10 +18,9 @@ function init(config) {
   strings = config.t;
   bindStaticText(config);
   bindNodes();
-  bindActions(config.codex_enabled);
+  setProviders(config.providers || []);
+  bindActions(providerOrder.length > 1);
   applyPopupSettings(config.popup_settings || {});
-  providers.claude = config.data;
-  providers.codex = config.codex_data;
   render(currentData());
   requestAnimationFrame(() => document.body.classList.add('open'));
 }
@@ -73,7 +75,34 @@ function bindNodes() {
   };
 }
 
-function bindActions(codexEnabled) {
+function setProviders(list) {
+  providerOrder = list.map((entry) => entry.id);
+  providerLabels = {};
+  providerInstallTitles = {};
+  providers = {};
+  list.forEach((entry) => {
+    providers[entry.id] = entry.data;
+    providerLabels[entry.id] = entry.label;
+    providerInstallTitles[entry.id] = entry.install_title;
+  });
+  if (selectedTab !== 'all' && !providerOrder.includes(selectedTab)) selectedTab = 'all';
+}
+
+function buildTabs() {
+  const buttons = [{ id: 'all', label: strings.tab_all }].concat(
+    providerOrder.map((id) => ({ id, label: providerLabels[id] })),
+  );
+  nodes.tabs.replaceChildren(...buttons.map((entry) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = entry.id === selectedTab ? 'tab-btn active' : 'tab-btn';
+    button.dataset.tab = entry.id;
+    button.textContent = entry.label;
+    return button;
+  }));
+}
+
+function bindActions(multipleProviders) {
   byId('closeBtn').addEventListener('click', () => pywebview.api.close());
   byId('changelogLink').addEventListener('click', () => pywebview.api.open_url());
   nodes.settingsBtn.addEventListener('click', toggleSettingsPanel);
@@ -87,7 +116,8 @@ function bindActions(codexEnabled) {
       renderProfile(getCurrentProfile());
     });
   });
-  if (!codexEnabled) return;
+  if (!multipleProviders) return;
+  buildTabs();
   nodes.tabs.classList.remove('hidden');
   nodes.tabs.querySelectorAll('.tab-btn').forEach((button) => {
     button.addEventListener('click', () => chooseTab(button.dataset.tab));
@@ -132,9 +162,10 @@ function chooseTab(tab) {
   render(currentData());
 }
 
-function updateBothData(claudeData, codexData) {
-  providers.claude = claudeData;
-  providers.codex = codexData;
+function updateProviders(list) {
+  list.forEach((entry) => {
+    providers[entry.id] = entry.data;
+  });
   render(currentData());
 }
 
@@ -144,23 +175,20 @@ function currentData() {
 }
 
 function combinedData() {
-  const claude = providers.claude || {};
-  const codex = providers.codex || {};
+  const lists = providerOrder.map((id) => (providers[id] || {}).usage || []);
+  const count = lists.reduce((longest, list) => Math.max(longest, list.length), 0);
   const usage = [];
-  const left = claude.usage || [];
-  const right = codex.usage || [];
-  const count = Math.max(left.length, right.length);
   for (let index = 0; index < count; index += 1) {
-    if (left[index]) usage.push({ ...left[index], provider: 'Claude', label: left[index].label });
-    if (right[index]) usage.push({ ...right[index], provider: 'Codex', label: right[index].label });
+    providerOrder.forEach((id, position) => {
+      const entry = lists[position][index];
+      if (entry) usage.push({ ...entry, provider: providerLabels[id], label: entry.label });
+    });
   }
-  return {
-    profile: null,
-    usage,
-    extra: null,
-    installations: [],
-    status: olderStatus(claude.status, codex.status),
-  };
+  const status = providerOrder.reduce(
+    (oldest, id) => olderStatus(oldest, (providers[id] || {}).status),
+    null,
+  );
+  return { profile: null, usage, extra: null, installations: [], status };
 }
 
 function olderStatus(a, b) {
@@ -223,7 +251,7 @@ function renderInstallations(items) {
   const show = popupSettings.show_install_section === true;
   nodes.install.classList.toggle('visible', show && items.length > 0);
   if (!show || !items.length) return;
-  nodes.installTitle.textContent = selectedTab === 'codex' ? strings.codex_cli : strings.claude_code;
+  nodes.installTitle.textContent = providerInstallTitles[selectedTab] || strings.claude_code;
   nodes.installRows.replaceChildren(...items.map((item) => {
     const row = document.createElement('div');
     const name = document.createElement('dt');

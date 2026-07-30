@@ -24,16 +24,24 @@ from .dashboard import DashboardServer
 from .formatting import elapsed_pct, field_period, format_credits, format_tooltip, parse_field_name, popup_label
 from .i18n import T
 from .idle import get_idle_seconds, is_workstation_locked
+from .kimi_api import read_access_token as read_kimi_access_token
+from .kimi_cache import KimiCache
 from .popup import UsagePopup
 from . import settings as _settings
 from .settings import (
     ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
-    POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
+    KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
     get_alert_thresholds,
 )
 from .tray_icon import create_icon_image, create_status_image, taskbar_uses_light_theme, watch_theme_change
 
 __all__ = ['AgentPulse', 'UsageMonitorForClaude', 'crash_log']
+
+# Tooltip headings for the providers rendered below the Claude section.
+_SECONDARY_TOOLTIP_TITLES = {
+    'codex': ('tooltip_title_codex', 'Codex Usage'),
+    'kimi': ('tooltip_title_kimi', 'Kimi Usage'),
+}
 
 
 def _future_iso(**delta: float) -> str:
@@ -60,7 +68,7 @@ def _is_quiet_time(now: datetime | None = None) -> bool:
 
 
 class AgentPulse:
-    """System tray controller for Claude and Codex usage data."""
+    """System tray controller for Claude, Codex, and Kimi usage data."""
 
     def __init__(self) -> None:
         self.running = True
@@ -68,10 +76,11 @@ class AgentPulse:
 
         self.cache = UsageCache()
         self.codex_cache = CodexCache() if CODEX_ENABLED and read_codex_access_token() else None
+        self.kimi_cache = KimiCache() if KIMI_ENABLED and read_kimi_access_token() else None
         self.dashboard = DashboardServer(self)
 
         self._last_response: dict[str, Any] = {}
-        self._last_codex_response: dict[str, Any] = {}
+        self._secondary_responses: dict[str, dict[str, Any]] = {}
         self._prev_utilization: dict[str, float] = {}
         self._provider_prev_utilization: dict[str, dict[str, float]] = {'claude': self._prev_utilization}
         self._prev_account_uuid: str | None = None
@@ -89,7 +98,7 @@ class AgentPulse:
 
         self.icon = pystray.Icon(
             'usage_monitor',
-            icon=create_icon_image(0, 0, self._light_taskbar),
+            icon=create_icon_image([0, 0], self._light_taskbar),
             title=T['loading'],
             menu=self._menu(),
         )
@@ -184,18 +193,24 @@ class AgentPulse:
         env.update({'USAGE_MONITOR_TITLE': T['notify_threshold_title'], 'USAGE_MONITOR_MESSAGE': message})
         run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
+    def _secondary_caches(self) -> list[tuple[str, Any]]:
+        """Return the active non-Claude provider caches in display order."""
+        caches = [('codex', self.codex_cache), ('kimi', self.kimi_cache)]
+        return [(name, cache) for name, cache in caches if cache is not None]
+
     def _open_popup(self) -> None:
         try:
             refresh_claude = self.cache.last_success_time is None or time.time() - self.cache.last_success_time >= POLL_FAST
-            refresh_codex = self.codex_cache is not None and (
-                self.codex_cache.last_success_time is None or time.time() - self.codex_cache.last_success_time >= POLL_FAST
-            )
             needs_claude_profile = not self.cache.profile
-            needs_codex_profile = self.codex_cache is not None and not self.codex_cache.profile
-            if refresh_claude or refresh_codex or needs_claude_profile or needs_codex_profile:
+            stale = {
+                name for name, cache in self._secondary_caches()
+                if cache.last_success_time is None or time.time() - cache.last_success_time >= POLL_FAST
+            }
+            missing_profiles = {name for name, cache in self._secondary_caches() if not cache.profile}
+            if refresh_claude or needs_claude_profile or stale or missing_profiles:
                 threading.Thread(
                     target=self._popup_refresh,
-                    args=(refresh_claude, refresh_codex, needs_claude_profile, needs_codex_profile),
+                    args=(refresh_claude, needs_claude_profile, stale, missing_profiles),
                     daemon=True,
                 ).start()
             UsagePopup(self)
@@ -203,43 +218,49 @@ class AgentPulse:
             self._popup_closed_at = time.time()
             self._popup_open = False
 
-    def _popup_refresh(self, refresh_claude: bool, refresh_codex: bool, claude_profile: bool, codex_profile: bool) -> None:
+    def _popup_refresh(self, refresh_claude: bool, claude_profile: bool, stale: set[str], missing_profiles: set[str]) -> None:
         if claude_profile:
             self.cache.ensure_profile()
         if refresh_claude:
             self.update()
-        if self.codex_cache is not None:
-            if codex_profile:
-                self.codex_cache.ensure_profile()
-            if refresh_codex:
-                self._update_codex()
+        for name, cache in self._secondary_caches():
+            if name in missing_profiles:
+                cache.ensure_profile()
+            if name in stale:
+                self._update_secondary(name, cache)
 
     def _provider_entry(self, data: dict[str, Any], field: str) -> dict[str, Any]:
         entry = data.get(field)
         return entry if isinstance(entry, dict) else {}
 
+    def _secondary_tooltip_sections(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return ``(heading, usage_data)`` pairs for the non-Claude providers."""
+        sections = []
+        for name, _cache in self._secondary_caches():
+            data = self._secondary_responses.get(name)
+            if not data:
+                continue
+            key, fallback = _SECONDARY_TOOLTIP_TITLES[name]
+            sections.append((T.get(key, fallback), data))
+        return sections
+
     def _render_tray(self) -> None:
         data = self._last_response
-        codex = self._last_codex_response
-        codex_available = bool(codex) and 'error' not in codex
-        if 'error' in data and not codex_available:
+        sections = self._secondary_tooltip_sections()
+        available = [entry for _heading, entry in sections if 'error' not in entry]
+        if 'error' in data and not available:
             self.icon.icon = create_status_image('C!' if data.get('auth_error') else '!', self._light_taskbar)
-            self.icon.title = format_tooltip(data, codex or None)
+            self.icon.title = format_tooltip(data, sections)
             return
 
-        claude_session = self._provider_entry(data, 'five_hour')
-        # Inner ring is shown only when Codex data is available; pass None for a
-        # single-ring icon when the user has no Codex session.
-        codex_pct: float | None = (
-            self._provider_entry(codex, 'five_hour').get('utilization', 0) or 0
-        ) if codex_available else None
+        # One ring per provider that has data; providers without a session are
+        # left out so the icon keeps its single- or double-ring geometry.
+        percentages = [self._provider_entry(data, 'five_hour').get('utilization', 0) or 0]
+        for entry in available:
+            percentages.append(self._provider_entry(entry, 'five_hour').get('utilization', 0) or 0)
 
-        self.icon.icon = create_icon_image(
-            claude_session.get('utilization', 0) or 0,
-            codex_pct,
-            light_taskbar=self._light_taskbar,
-        )
-        self.icon.title = format_tooltip(data, codex if codex else None)
+        self.icon.icon = create_icon_image(percentages, light_taskbar=self._light_taskbar)
+        self.icon.title = format_tooltip(data, sections)
 
     def _on_theme_changed(self) -> None:
         light = taskbar_uses_light_theme()
@@ -250,7 +271,8 @@ class AgentPulse:
 
     def update(self) -> None:
         result = self.cache.update()
-        self._update_codex()
+        for name, cache in self._secondary_caches():
+            self._update_secondary(name, cache)
         if result.data is None:
             return
         self._last_response = result.data
@@ -293,16 +315,15 @@ class AgentPulse:
         self._prev_account_uuid = uuid
         return False
 
-    def _update_codex(self) -> None:
-        if self.codex_cache is None:
-            return
-        result = self.codex_cache.update()
+    def _update_secondary(self, provider: str, cache: Any) -> None:
+        """Refresh one non-Claude provider and process its alerts."""
+        result = cache.update()
         if result.data is None:
             return
-        self._last_codex_response = result.data
-        self.dashboard.history.record('codex', result.data)
+        self._secondary_responses[provider] = result.data
+        self.dashboard.history.record(provider, result.data)
         if 'error' not in result.data:
-            self._process_provider_alerts('codex', result.data)
+            self._process_provider_alerts(provider, result.data)
 
     def _quota_fields(self, data: dict[str, Any]) -> dict[str, float]:
         return {
@@ -513,8 +534,8 @@ class AgentPulse:
 
     def poll_loop(self) -> None:
         self.cache.ensure_profile()
-        if self.codex_cache is not None:
-            self.codex_cache.ensure_profile()
+        for _name, cache in self._secondary_caches():
+            cache.ensure_profile()
         while self.running:
             self.update()
             if self._deferred_notifications and not self._is_user_away():

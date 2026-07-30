@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from agentpulse.formatting import (
     PERIOD_5H, PERIOD_7D,
     elapsed_pct, expand_popup_fields, field_period, format_credits, format_tooltip,
+    period_to_field_name,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
 from agentpulse.i18n import LOCALE_DIR
@@ -770,9 +771,44 @@ class TestFormatTooltip(unittest.TestCase):
             'five_hour': {'utilization': 10.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
             'seven_day': {'utilization': 14.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
         }
-        result = format_tooltip(data, codex_data)
+        result = format_tooltip(data, [('Codex Usage', codex_data)])
         self.assertLessEqual(len(result), 128)
         self.assertFalse(result.endswith('\n'))
+
+    @patch('agentpulse.formatting.time_until', return_value='')
+    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    def test_three_providers_each_get_a_section(self, _mock_tu):
+        """Every healthy provider contributes a heading and its own lines."""
+        data = {'five_hour': {'utilization': 10.0, 'resets_at': ''}}
+        codex_data = {'five_hour': {'utilization': 20.0, 'resets_at': ''}}
+        kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
+        result = format_tooltip(data, [('Codex Usage', codex_data), ('Kimi Usage', kimi_data)])
+        self.assertEqual(
+            result,
+            'Claude Usage\n5h: 10%\nCodex Usage\n5h: 20%\nKimi Usage\n5h: 30%',
+        )
+
+    @patch('agentpulse.formatting.time_until', return_value='')
+    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    def test_failing_secondary_provider_is_skipped(self, _mock_tu):
+        """A provider whose fetch failed contributes no heading and no lines."""
+        data = {'five_hour': {'utilization': 10.0, 'resets_at': ''}}
+        kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
+        result = format_tooltip(data, [('Codex Usage', {'error': 'boom'}), ('Kimi Usage', kimi_data)])
+        self.assertEqual(result, 'Claude Usage\n5h: 10%\nKimi Usage\n5h: 30%')
+
+    @patch('agentpulse.formatting.time_until', return_value='')
+    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    def test_claude_error_with_healthy_secondary_still_renders(self, _mock_tu):
+        """A Claude error is not fatal while another provider has data."""
+        kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
+        result = format_tooltip({'error': 'boom'}, [('Kimi Usage', kimi_data)])
+        self.assertEqual(result, 'Claude Usage\nKimi Usage\n5h: 30%')
+
+    def test_all_providers_failing_renders_claude_error(self):
+        """When nothing has data the Claude error is shown."""
+        result = format_tooltip({'error': 'Connection failed'}, [('Kimi Usage', {'error': 'boom'})])
+        self.assertIn('Connection failed', result)
 
     @patch('agentpulse.formatting.time_until', return_value='')
     @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['seven_day_sonnet'])
@@ -887,3 +923,43 @@ class TestFormatCredits(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# period_to_field_name
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodToFieldName(unittest.TestCase):
+    """Tests for period_to_field_name()."""
+
+    def test_five_hour_window(self):
+        self.assertEqual(period_to_field_name(5 * 3600), 'five_hour')
+
+    def test_seven_day_window(self):
+        self.assertEqual(period_to_field_name(7 * 24 * 3600), 'seven_day')
+
+    def test_exactly_one_day_prefers_day_unit(self):
+        self.assertEqual(period_to_field_name(24 * 3600), 'one_day')
+
+    def test_round_trip_with_field_period(self):
+        for field in ('one_hour', 'five_hour', 'twelve_hour', 'one_day', 'seven_day'):
+            period = field_period(field)
+            self.assertIsNotNone(period)
+            self.assertEqual(period_to_field_name(period), field)
+
+    def test_partial_day_falls_back_to_hours(self):
+        self.assertEqual(period_to_field_name(12 * 3600), 'twelve_hour')
+
+    def test_unnameable_window_returns_none(self):
+        self.assertIsNone(period_to_field_name(36 * 3600))
+
+    def test_number_beyond_vocabulary_returns_none(self):
+        self.assertIsNone(period_to_field_name(13 * 3600))
+
+    def test_non_whole_hour_returns_none(self):
+        self.assertIsNone(period_to_field_name(90 * 60))
+
+    def test_zero_and_negative_return_none(self):
+        self.assertIsNone(period_to_field_name(0))
+        self.assertIsNone(period_to_field_name(-3600))

@@ -25,14 +25,15 @@ Prioritize readability and auditability - users handle credentials and must be a
 
 ## Security & Transparency
 - All URLs and API endpoints as top-level constants - no dynamic URL construction
-- Network communication exclusively with `api.anthropic.com` - no other destinations
+- Network communication exclusively with `api.anthropic.com` (Claude), `chatgpt.com` (Codex), and `api.kimi.com` (Kimi) - no other destinations
+- Provider credential files are read-only: never rewrite them, never use a refresh token that belongs to another CLI
 - Credentials used only in HTTP Authorization headers - never log, store, or transmit elsewhere
 - File writes are limited to two app-owned files next to the executable: the settings file (dashboard/popup settings save) and the dashboard history file `agentpulse-history.jsonl` (sanitized quota snapshots only - never tokens, emails, or account identifiers). No other file writes
 - The dashboard's localhost bind is not a security boundary against browsers: every POST endpoint must require the per-run session token and a same-origin `Origin` header, and all requests must pass loopback `Host` validation (DNS rebinding). Never add a state-changing endpoint without these checks
 - No `eval()`, `exec()`, `compile()`, or dynamic imports - no dynamic code execution
 - No obfuscation - no base64-encoded strings, no encoded URLs or tokens
 - Modular package architecture in `agentpulse/` - small focused modules are easier to audit than one large file
-- Security-critical code (credentials, API calls) isolated in `api.py` - the only module handling credentials
+- Security-critical code (credentials, API calls) isolated in the per-provider `*_api.py` modules - the only modules handling credentials
 - Pure data files (translations, config) stay separate - they contain no logic or credential access
 - Minimal, well-known dependencies only (e.g., requests, Pillow, pystray)
 

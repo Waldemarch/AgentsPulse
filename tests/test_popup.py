@@ -11,7 +11,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from agentpulse.cache import CacheSnapshot
-from agentpulse.popup import UsagePopup, _BASELINE_DPI, _init_config, _snapshot_to_dict, _usage_entries
+from agentpulse.popup import (
+    UsagePopup, _BASELINE_DPI, _init_config, _provider_entries,
+    _secondary_snapshot_to_dict, _snapshot_to_dict, _usage_entries,
+)
 
 
 def _snap(
@@ -450,9 +453,9 @@ class TestInitConfig(unittest.TestCase):
     """Tests for _init_config - builds the JS init() config object."""
 
     def test_top_level_keys(self):
-        """Config has colors, t (translations), app_version, data, codex_enabled, and codex_data."""
+        """Config has colors, t (translations), app_version, popup_settings, and providers."""
         config = _init_config(_snap())
-        self.assertEqual(set(config.keys()), {'colors', 't', 'app_version', 'data', 'codex_enabled', 'codex_data'})
+        self.assertEqual(set(config.keys()), {'colors', 't', 'app_version', 'popup_settings', 'providers'})
 
     def test_colors_from_settings(self):
         """Color values come from settings module constants."""
@@ -500,12 +503,75 @@ class TestInitConfig(unittest.TestCase):
         config = _init_config(_snap())
         self.assertEqual(config['app_version'], __version__)
 
-    def test_data_is_snapshot_to_dict_output(self):
-        """The data key contains the output of _snapshot_to_dict."""
+    def test_claude_provider_is_first_and_holds_snapshot_data(self):
+        """Claude is always the first provider and carries _snapshot_to_dict output."""
         snap = _snap(profile={'account': {'email': 'a@b.com'}, 'organization': {}})
         config = _init_config(snap)
-        self.assertEqual(config['data']['profile']['email'], 'a@b.com')
-        self.assertEqual(set(config['data'].keys()), {'profile', 'usage', 'extra', 'installations', 'status'})
+        claude = config['providers'][0]
+        self.assertEqual(claude['id'], 'claude')
+        self.assertEqual(claude['data']['profile']['email'], 'a@b.com')
+        self.assertEqual(set(claude['data'].keys()), {'profile', 'usage', 'extra', 'installations', 'status'})
+
+    def test_only_claude_without_secondary_providers(self):
+        """Without other providers the popup gets a single-entry provider list."""
+        config = _init_config(_snap())
+        self.assertEqual([entry['id'] for entry in config['providers']], ['claude'])
+
+    def test_secondary_providers_appended_in_order(self):
+        """Codex and Kimi follow Claude, in the order they are passed."""
+        secondary = [
+            ('codex', _secondary_snapshot_to_dict(_snap())),
+            ('kimi', _secondary_snapshot_to_dict(_snap())),
+        ]
+        config = _init_config(_snap(), secondary=secondary)
+        self.assertEqual([entry['id'] for entry in config['providers']], ['claude', 'codex', 'kimi'])
+
+    def test_provider_labels_are_display_names(self):
+        """Each provider entry carries the label the tab bar renders."""
+        secondary = [('kimi', _secondary_snapshot_to_dict(_snap()))]
+        config = _init_config(_snap(), secondary=secondary)
+        self.assertEqual([entry['label'] for entry in config['providers']], ['Claude', 'Kimi'])
+
+    def test_each_provider_has_an_install_title(self):
+        """The installed-version heading is provided per provider."""
+        secondary = [
+            ('codex', _secondary_snapshot_to_dict(_snap())),
+            ('kimi', _secondary_snapshot_to_dict(_snap())),
+        ]
+        config = _init_config(_snap(), secondary=secondary)
+        titles = [entry['install_title'] for entry in config['providers']]
+        self.assertEqual(len(titles), 3)
+        self.assertEqual(len(set(titles)), 3)
+
+
+class TestSecondarySnapshotToDict(unittest.TestCase):
+    """Tests for _secondary_snapshot_to_dict - the non-Claude popup view-model."""
+
+    def test_same_keys_as_claude_view(self):
+        self.assertEqual(
+            set(_secondary_snapshot_to_dict(_snap()).keys()),
+            {'profile', 'usage', 'extra', 'installations', 'status'},
+        )
+
+    def test_no_extra_usage_section(self):
+        """Only Claude has extra usage, so the section is always absent."""
+        self.assertIsNone(_secondary_snapshot_to_dict(_snap())['extra'])
+
+    def test_cli_version_becomes_an_installation_row(self):
+        entry = _secondary_snapshot_to_dict(_snap(), '1.2.3')
+        self.assertEqual(entry['installations'], [{'name': 'CLI', 'version': '1.2.3'}])
+
+    def test_missing_cli_version_yields_no_rows(self):
+        self.assertEqual(_secondary_snapshot_to_dict(_snap(), None)['installations'], [])
+
+
+class TestProviderEntries(unittest.TestCase):
+    """Tests for _provider_entries - the tab list handed to the popup page."""
+
+    def test_unknown_provider_raises(self):
+        """An unregistered provider name is a programming error, not silent output."""
+        with self.assertRaises(KeyError):
+            _provider_entries({}, [('gemini', {})])
 
 
 # ---------------------------------------------------------------------------

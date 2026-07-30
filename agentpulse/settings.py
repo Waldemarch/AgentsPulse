@@ -17,15 +17,19 @@ __all__ = [
     'FG', 'FG_DIM', 'FG_HEADING', 'FG_LINK',
     'HEATMAP_ENABLED', 'HISTORY_FILENAME', 'HISTORY_PERSIST',
     'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'IDLE_PAUSE',
+    'KIMI_ENABLED',
     'LANGUAGE', 'LEGACY_SETTINGS_FILENAMES', 'MAX_BACKOFF',
     'ON_RESET_COMMAND', 'ON_THRESHOLD_COMMAND',
     'POLL_ERROR', 'POLL_FAST', 'POLL_FAST_EXTRA', 'POLL_INTERVAL',
-    'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED',
+    'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED', 'PROVIDER_LABELS',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
     'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
     'dashboard_settings', 'get_alert_thresholds', 'history_write_path', 'reload', 'save_dashboard_settings', 'settings_write_path',
     'EMAIL_DISPLAY', 'SHOW_INSTALL_SECTION',
 ]
+
+# Display names of the supported providers, in the order the UI presents them.
+PROVIDER_LABELS = {'claude': 'Claude', 'codex': 'Codex', 'kimi': 'Kimi'}
 
 SETTINGS_FILENAME = 'agentpulse-settings.json'
 LEGACY_SETTINGS_FILENAMES = ('usage-monitor-settings.json',)
@@ -40,7 +44,7 @@ _MIN_INTS = {
     'idle_pause': 0,
 }
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
-_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
+_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
 _TIMES = {'prediction_day_end_time', 'quiet_hours_start', 'quiet_hours_end'}
@@ -51,7 +55,7 @@ _ICON_COLORS = {'icon_light', 'icon_dark'}
 _THRESHOLD_PREFIX = 'alert_thresholds_'
 _BAR_MODES = {'utilization', 'overage'}
 _DASHBOARD_KEYS = {
-    'codex_enabled', 'icon_fields', 'tooltip_fields',
+    'codex_enabled', 'kimi_enabled', 'icon_fields', 'tooltip_fields',
     'on_reset_command', 'on_threshold_command',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
@@ -283,7 +287,7 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = value
             else:
                 errors.append(f'{key}: invalid value')
-        elif key in {'codex_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled'}:
+        elif key in {'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled'}:
             if isinstance(value, bool):
                 accepted[key] = value
             else:
@@ -316,12 +320,15 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
 def dashboard_settings() -> dict[str, object]:
     return {
         'codex_enabled': CODEX_ENABLED,
+        'kimi_enabled': KIMI_ENABLED,
         'icon_fields': ICON_FIELDS,
         'tooltip_fields': TOOLTIP_FIELDS,
         'alert_thresholds_five_hour': get_alert_thresholds('five_hour'),
         'alert_thresholds_seven_day': get_alert_thresholds('seven_day'),
         'alert_thresholds_codex_five_hour': get_alert_thresholds('five_hour', provider='codex'),
         'alert_thresholds_codex_seven_day': get_alert_thresholds('seven_day', provider='codex'),
+        'alert_thresholds_kimi_five_hour': get_alert_thresholds('five_hour', provider='kimi'),
+        'alert_thresholds_kimi_seven_day': get_alert_thresholds('seven_day', provider='kimi'),
         'on_reset_command': ON_RESET_COMMAND,
         'on_threshold_command': ON_THRESHOLD_COMMAND,
         'prediction_enabled': PREDICTION_ENABLED,
@@ -408,6 +415,7 @@ LANGUAGE = _S.get('language', '')
 ON_RESET_COMMAND = _S.get('on_reset_command', [])
 ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
 CODEX_ENABLED = _S.get('codex_enabled', True)
+KIMI_ENABLED = _S.get('kimi_enabled', True)
 SHOW_INSTALL_SECTION = _S.get('show_install_section', False)
 EMAIL_DISPLAY = _S.get('email_display', 'show')
 
@@ -456,7 +464,7 @@ def reload() -> None:
     global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END
     global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
-    global HEATMAP_ENABLED, CODEX_ENABLED
+    global HEATMAP_ENABLED, CODEX_ENABLED, KIMI_ENABLED
     global ICON_FIELDS, TOOLTIP_FIELDS
     global ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW
     global SHOW_INSTALL_SECTION, EMAIL_DISPLAY
@@ -472,6 +480,7 @@ def reload() -> None:
     PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
     HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
     CODEX_ENABLED = _S.get('codex_enabled', True)
+    KIMI_ENABLED = _S.get('kimi_enabled', True)
     ICON_FIELDS = _S.get('icon_fields', ['five_hour', 'seven_day'])
     TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
     ALERT_TIME_AWARE = _S.get('alert_time_aware', True)

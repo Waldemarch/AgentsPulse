@@ -20,19 +20,28 @@ from .formatting import (
     format_credits, midnight_positions, popup_label, time_until,
 )
 from .i18n import T
+from .kimi_cli import kimi_version
+from .provider_cache import UsageSnapshot
 from . import settings
 from .settings import (
-    BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG, CODEX_ENABLED,
-    FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS,
+    BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG,
+    FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS, PROVIDER_LABELS,
     save_dashboard_settings,
 )
 
 if TYPE_CHECKING:
     from .app import AgentPulse
     from .cache import CacheSnapshot
-    from .codex_cache import CodexSnapshot
 
 __all__ = ['UsagePopup']
+
+# Heading of the popup's installed-version section, per non-Claude provider.
+_SECONDARY_INSTALL_TITLES = {
+    'codex': ('codex_cli', 'CODEX CLI'),
+    'kimi': ('kimi_cli', 'KIMI CLI'),
+}
+# Reports the installed CLI version of each non-Claude provider.
+_SECONDARY_CLI_VERSIONS = {'codex': codex_version, 'kimi': kimi_version}
 
 _POPUP_DIR = Path(__file__).parent / 'popup'
 _BASELINE_DPI = 96
@@ -132,8 +141,9 @@ def _snapshot_to_dict(
     }
 
 
-def _codex_snapshot_to_dict(snap: CodexSnapshot, codex_ver: str | None = None) -> dict[str, Any]:
-    installations = [{'name': 'CLI', 'version': codex_ver}] if codex_ver else []
+def _secondary_snapshot_to_dict(snap: UsageSnapshot, cli_version: str | None = None) -> dict[str, Any]:
+    """Build the popup view-model for a non-Claude provider."""
+    installations = [{'name': 'CLI', 'version': cli_version}] if cli_version else []
     return {
         'profile': _profile_view(snap.profile),
         'usage': _usage_view(snap.usage),
@@ -143,11 +153,29 @@ def _codex_snapshot_to_dict(snap: CodexSnapshot, codex_ver: str | None = None) -
     }
 
 
+def _provider_entries(claude_data: dict[str, Any], secondary: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Build the provider list the popup renders as tabs, Claude first."""
+    entries = [{
+        'id': 'claude',
+        'label': PROVIDER_LABELS['claude'],
+        'install_title': T['claude_code'],
+        'data': claude_data,
+    }]
+    for provider, data in secondary:
+        key, fallback = _SECONDARY_INSTALL_TITLES[provider]
+        entries.append({
+            'id': provider,
+            'label': PROVIDER_LABELS[provider],
+            'install_title': T.get(key, fallback),
+            'data': data,
+        })
+    return entries
+
+
 def _init_config(
     snap: CacheSnapshot,
-    codex_snap: CodexSnapshot | None = None,
+    secondary: list[tuple[str, dict[str, Any]]] | None = None,
     next_poll_time: float | None = None,
-    codex_ver: str | None = None,
 ) -> dict[str, Any]:
     return {
         'colors': {
@@ -171,7 +199,7 @@ def _init_config(
             'extra_usage': T['extra_usage'],
             'claude_code': T['claude_code'],
             'changelog': T['changelog'],
-            'codex_cli': T.get('codex_cli', 'CODEX CLI'),
+            'tab_all': T.get('tab_all', 'All'),
             'status_updated_s': T['status_updated_s'],
             'status_updated': T['status_updated'],
             'status_next_update': T['status_next_update'],
@@ -187,15 +215,13 @@ def _init_config(
             'email_hide': T.get('email_hide', 'Hide'),
         },
         'app_version': __version__,
-        'codex_enabled': CODEX_ENABLED and codex_snap is not None,
         'popup_settings': {
             # Read via the module so values saved from the popup (which call
             # settings.reload()) are reflected the next time it opens.
             'show_install_section': settings.SHOW_INSTALL_SECTION,
             'email_display': settings.EMAIL_DISPLAY,
         },
-        'data': _snapshot_to_dict(snap, next_poll_time=next_poll_time),
-        'codex_data': _codex_snapshot_to_dict(codex_snap, codex_ver) if codex_snap is not None else None,
+        'providers': _provider_entries(_snapshot_to_dict(snap, next_poll_time=next_poll_time), secondary or []),
     }
 
 
@@ -236,8 +262,9 @@ class UsagePopup:
         self._shown = False
         snap = app.cache.snapshot
         self._last_version = snap.version
-        self._last_codex_version = app.codex_cache.snapshot.version if app.codex_cache is not None else -1
-        self._codex_ver = codex_version() if CODEX_ENABLED else None
+        self._secondary = app._secondary_caches()
+        self._last_secondary_versions = {name: cache.snapshot.version for name, cache in self._secondary}
+        self._cli_versions = {name: _SECONDARY_CLI_VERSIONS[name]() for name, _cache in self._secondary}
 
         api = _PopupApi(self)
         self._window = webview.create_window(
@@ -260,12 +287,10 @@ class UsagePopup:
         self._closed.wait()
 
     def _on_loaded(self) -> None:
-        codex_snap = self.app.codex_cache.snapshot if self.app.codex_cache is not None else None
         config = _init_config(
             self.app.cache.snapshot,
-            codex_snap=codex_snap,
+            secondary=self._secondary_views(),
             next_poll_time=self.app._next_poll_time,
-            codex_ver=self._codex_ver,
         )
         self._window.evaluate_js(f'init({json.dumps(config)})')
         self._popup_hwnd = self._window.native.Handle.ToInt32()
@@ -367,22 +392,29 @@ class UsagePopup:
                 return
             try:
                 snap = self.app.cache.snapshot
-                codex_snap = self.app.codex_cache.snapshot if self.app.codex_cache is not None else None
-                codex_version_now = codex_snap.version if codex_snap is not None else -1
+                versions = {name: cache.snapshot.version for name, cache in self._secondary}
                 poll_now = self.app._next_poll_time
-                changed = snap.version != self._last_version or codex_version_now != self._last_codex_version or poll_now != last_poll
+                changed = snap.version != self._last_version or versions != self._last_secondary_versions or poll_now != last_poll
                 if not changed:
                     continue
                 if snap.version != self._last_version:
                     self._last_version = snap.version
                     installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
-                self._last_codex_version = codex_version_now
+                self._last_secondary_versions = versions
                 last_poll = poll_now
                 claude_data = _snapshot_to_dict(snap, installations=installations, next_poll_time=poll_now)
-                codex_data = _codex_snapshot_to_dict(codex_snap, self._codex_ver) if codex_snap is not None else None
-                self._window.evaluate_js(f'updateBothData({json.dumps(claude_data)}, {json.dumps(codex_data)})')
+                entries = [{'id': 'claude', 'data': claude_data}]
+                entries.extend({'id': name, 'data': data} for name, data in self._secondary_views())
+                self._window.evaluate_js(f'updateProviders({json.dumps(entries)})')
             except Exception:
                 return
+
+    def _secondary_views(self) -> list[tuple[str, dict[str, Any]]]:
+        """Build the popup view-model of every active non-Claude provider."""
+        return [
+            (name, _secondary_snapshot_to_dict(cache.snapshot, self._cli_versions.get(name)))
+            for name, cache in self._secondary
+        ]
 
     def _tray_position(self, physical_width: int, physical_height: int) -> tuple[int, int]:
         area = ctypes.wintypes.RECT()
