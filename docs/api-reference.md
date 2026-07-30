@@ -1,6 +1,6 @@
 # API Reference
 
-Example responses from the Anthropic OAuth API endpoints used by the app. These serve as implementation reference - field names, data types, and structure.
+Example responses from the provider endpoints used by the app. These serve as implementation reference - field names, data types, and structure.
 
 > [!NOTE]
 > These are real-world examples with anonymized data, captured in March 2026. Fields may change without notice as these are undocumented internal endpoints. If your API response contains fields not listed here, please open an issue with an anonymized example so we can keep this reference up to date.
@@ -72,3 +72,35 @@ https://api.anthropic.com/api/oauth/profile
   }
 }
 ```
+
+## Kimi: /coding/v1/usages
+
+```
+https://api.kimi.com/coding/v1/usages
+```
+
+```json
+{
+  "usage": {
+    "limit": "2048",
+    "used": "214",
+    "remaining": "1834",
+    "resetTime": "2026-01-09T15:23:13.716839300Z"
+  },
+  "limits": [{
+    "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+    "detail": {
+      "limit": "200",
+      "used": "139",
+      "remaining": "61",
+      "resetTime": "2026-01-06T13:33:02.717479433Z"
+    }
+  }]
+}
+```
+
+Notes:
+
+- Counts are **requests**, not tokens, and arrive as strings. `usage` is the weekly allowance (1,024 / 2,048 / 7,168 requests on Andante / Moderato / Allegretto); the 300 minute window is the 200-request 5-hour rate limit, identical on every tier.
+- `resetTime` carries nanosecond precision, which `datetime.fromisoformat` rejects, so the app truncates it to microseconds.
+- The endpoint exposes only these two horizons. Kimi membership also has a **monthly credit pool** that freezes Kimi Code once exhausted (resetting on your subscription anniversary, not the first of the month), but it is not reported here - it lives behind the web billing service, which the app deliberately does not call.

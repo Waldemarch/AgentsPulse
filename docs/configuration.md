@@ -30,13 +30,15 @@ Configure usage percentage thresholds that trigger Windows notifications. Sessio
 | `alert_time_aware` | `true` | Only alert when usage outpaces elapsed time |
 | `alert_time_aware_below` | `90` | Time-aware check applies only to thresholds below this value; thresholds at or above always fire |
 
-Threshold lookup uses a fallback chain: exact match (e.g. `alert_thresholds_seven_day_opus`), then base period (e.g. `alert_thresholds_seven_day`), then no alerts. Provider-specific keys are checked first for non-Claude providers, so Codex can have separate thresholds without changing Claude behavior:
+Threshold lookup uses a fallback chain: exact match (e.g. `alert_thresholds_seven_day_opus`), then base period (e.g. `alert_thresholds_seven_day`), then no alerts. Provider-specific keys are checked first for non-Claude providers, so Codex and Kimi can have separate thresholds without changing Claude behavior:
 
 ```json
 {
     "alert_thresholds_seven_day_opus": [50, 80, 95],
     "alert_thresholds_codex_five_hour": [70, 90],
-    "alert_thresholds_codex_seven_day": [90]
+    "alert_thresholds_codex_seven_day": [90],
+    "alert_thresholds_kimi_five_hour": [70, 90],
+    "alert_thresholds_kimi_seven_day": [90]
 }
 ```
 
@@ -49,6 +51,8 @@ The tray tooltip shows a quick usage summary when you hover over the icon. By de
 | `tooltip_fields` | `["five_hour", "seven_day"]` | Which usage fields to show in the tray tooltip, in order |
 
 Must be an array of non-empty strings. Duplicates are silently removed. An empty array `[]` is valid (tooltip shows only the title, no usage fields). Unknown field names are accepted - if a field is `null` or missing from the API response, it is simply skipped.
+
+Windows caps tray tooltips at 128 characters and whole trailing lines are dropped to fit, so with several providers active the last provider's section may not be visible. Shorten `tooltip_fields` if you want every provider in the tooltip.
 
 **Known field names:** `five_hour`, `seven_day`, `seven_day_sonnet`, `seven_day_opus`, `seven_day_cowork`, `seven_day_oauth_apps`
 
@@ -118,6 +122,22 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 | Key | Default | Description |
 |-----|---------|-------------|
 | `codex_enabled` | `true` | Enable Codex usage monitoring when a local Codex CLI token is present. If no token exists in `~/.codex/auth.json` (or `CODEX_CONFIG_DIR/auth.json`), Codex UI is hidden and no Codex usage request is made |
+| `kimi_enabled` | `true` | Enable Kimi usage monitoring when a local Kimi Code CLI token is present. If no token exists in `~/.kimi-code/credentials/kimi-code.json` (or `KIMI_CODE_HOME/credentials/kimi-code.json`), Kimi UI is hidden and no Kimi usage request is made |
+
+Kimi credentials are read only. The app never uses the refresh token and never rewrites the credential file, so an expired Kimi session is renewed by signing in with the Kimi Code CLI again.
+
+### Kimi quota mapping
+
+The Kimi Code API reports a weekly request allowance and a set of rolling rate-limit windows. They are mapped onto the same field names the other providers use, so tooltip fields, popup fields, and alert thresholds work identically:
+
+| Kimi API | Field | Notes |
+|----------|-------|-------|
+| `usage` | `seven_day` | Weekly request quota; refreshes every 7 days from your subscription date, not on a fixed weekday |
+| `limits[]` with a 300 minute window | `five_hour` | Rolling 5-hour rate limit; 200 requests on every membership tier |
+
+Windows the app cannot name in whole hours or days are skipped rather than shown under an invented field name.
+
+Kimi's membership also has a monthly credit pool that can freeze Kimi Code once it is exhausted, independent of the weekly quota. The Kimi Code API does not expose it, so the app cannot show it - check it on your Kimi membership page.
 
 ## Local dashboard
 
@@ -125,7 +145,7 @@ Use **Open Dashboard** from the tray context menu to start a browser dashboard o
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
 
 History settings:
 

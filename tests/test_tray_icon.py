@@ -172,33 +172,33 @@ class TestCreateIconImage(unittest.TestCase):
 
     def test_returns_64x64_rgba_image(self):
         """Icon is always 64x64 RGBA."""
-        img = tray_icon_mod.create_icon_image(0, 0)
+        img = tray_icon_mod.create_icon_image([0, 0])
 
         self.assertEqual(img.size, (64, 64))
         self.assertEqual(img.mode, 'RGBA')
 
     def test_low_usage_renders_without_error(self):
         """Usage <= 50% renders successfully."""
-        img = tray_icon_mod.create_icon_image(30, 20)
+        img = tray_icon_mod.create_icon_image([30, 20])
 
         self.assertEqual(img.size, (64, 64))
 
     def test_high_usage_renders_without_error(self):
         """Usage > 50% renders successfully."""
-        img = tray_icon_mod.create_icon_image(75, 20)
+        img = tray_icon_mod.create_icon_image([75, 20])
 
         self.assertEqual(img.size, (64, 64))
 
     def test_full_usage_renders_without_error(self):
         """Usage >= 100% renders successfully."""
-        img = tray_icon_mod.create_icon_image(100, 20)
+        img = tray_icon_mod.create_icon_image([100, 20])
 
         self.assertEqual(img.size, (64, 64))
 
     def test_dark_and_light_taskbar_produce_different_images(self):
         """Dark vs light taskbar produces different pixel data (different track colours)."""
-        img_dark = tray_icon_mod.create_icon_image(50, 50, light_taskbar=False)
-        img_light = tray_icon_mod.create_icon_image(50, 50, light_taskbar=True)
+        img_dark = tray_icon_mod.create_icon_image([50, 50], light_taskbar=False)
+        img_light = tray_icon_mod.create_icon_image([50, 50], light_taskbar=True)
 
         self.assertEqual(img_dark.size, (64, 64))
         self.assertEqual(img_light.size, (64, 64))
@@ -206,44 +206,83 @@ class TestCreateIconImage(unittest.TestCase):
 
     def test_zero_usage_renders_full_ring(self):
         """0 % usage renders a full ring (maximum coloured arc)."""
-        img = tray_icon_mod.create_icon_image(0)
+        img = tray_icon_mod.create_icon_image([0])
         self.assertEqual(img.size, (64, 64))
 
     def test_usage_percent_changes_icon(self):
         """Different usage levels produce visually distinct icons."""
-        img_full = tray_icon_mod.create_icon_image(100)
-        img_zero = tray_icon_mod.create_icon_image(0)
+        img_full = tray_icon_mod.create_icon_image([100])
+        img_zero = tray_icon_mod.create_icon_image([0])
         self.assertNotEqual(img_full.tobytes(), img_zero.tobytes())
 
     def test_single_ring_vs_double_ring_differ(self):
-        """Single-ring icon (pct_bottom=None) differs from two-ring icon."""
-        img_single = tray_icon_mod.create_icon_image(50)
-        img_double = tray_icon_mod.create_icon_image(50, 50)
+        """A one-provider icon differs from a two-provider icon."""
+        img_single = tray_icon_mod.create_icon_image([50])
+        img_double = tray_icon_mod.create_icon_image([50, 50])
         self.assertNotEqual(img_single.tobytes(), img_double.tobytes())
 
     def test_inner_ring_usage_changes_icon(self):
-        """Codex inner ring usage changes the icon independently."""
-        img_low  = tray_icon_mod.create_icon_image(50, 0)
-        img_high = tray_icon_mod.create_icon_image(50, 90)
+        """The second provider's ring changes the icon independently."""
+        img_low  = tray_icon_mod.create_icon_image([50, 0])
+        img_high = tray_icon_mod.create_icon_image([50, 90])
         self.assertNotEqual(img_low.tobytes(), img_high.tobytes())
 
     def test_no_font_calls_for_ring_icon(self):
         """Ring rendering does not call load_font (no text drawn)."""
         with patch.object(tray_icon_mod, 'load_font') as mock_font:
-            tray_icon_mod.create_icon_image(30, 20)
+            tray_icon_mod.create_icon_image([30, 20])
             mock_font.assert_not_called()
 
     def test_warn_threshold_changes_colour(self):
         """Usage ≥ 80 % produces a different icon colour than usage < 80 %."""
-        img_normal = tray_icon_mod.create_icon_image(79)
-        img_warn   = tray_icon_mod.create_icon_image(80)
+        img_normal = tray_icon_mod.create_icon_image([79])
+        img_warn   = tray_icon_mod.create_icon_image([80])
         self.assertNotEqual(img_normal.tobytes(), img_warn.tobytes())
 
     def test_crit_threshold_changes_colour(self):
         """Usage ≥ 95 % produces a different icon colour than usage < 95 %."""
-        img_warn = tray_icon_mod.create_icon_image(94)
-        img_crit = tray_icon_mod.create_icon_image(95)
+        img_warn = tray_icon_mod.create_icon_image([94])
+        img_crit = tray_icon_mod.create_icon_image([95])
         self.assertNotEqual(img_warn.tobytes(), img_crit.tobytes())
+
+    def test_three_rings_render(self):
+        """Three providers produce a valid icon."""
+        img = tray_icon_mod.create_icon_image([10, 50, 90])
+        self.assertEqual(img.size, (64, 64))
+        self.assertEqual(img.mode, 'RGBA')
+
+    def test_each_ring_count_has_its_own_layout(self):
+        """One, two, and three providers each render differently."""
+        images = [tray_icon_mod.create_icon_image([50] * count).tobytes() for count in (1, 2, 3)]
+        self.assertEqual(len(set(images)), 3)
+
+    def test_third_ring_usage_changes_icon(self):
+        """The third provider's ring changes the icon independently."""
+        img_low = tray_icon_mod.create_icon_image([50, 50, 10])
+        img_high = tray_icon_mod.create_icon_image([50, 50, 90])
+        self.assertNotEqual(img_low.tobytes(), img_high.tobytes())
+
+    def test_three_rings_stay_inside_the_canvas(self):
+        """Rings never touch the icon border, so the tray keeps its padding."""
+        img = tray_icon_mod.create_icon_image([0, 0, 0])
+        border = (
+            [img.getpixel((x, 0)) for x in range(64)]
+            + [img.getpixel((x, 63)) for x in range(64)]
+            + [img.getpixel((0, y)) for y in range(64)]
+            + [img.getpixel((63, y)) for y in range(64)]
+        )
+        self.assertTrue(all(pixel[3] == 0 for pixel in border))
+
+    def test_more_providers_than_rings_falls_back_to_widest_layout(self):
+        """A fourth provider does not crash; the known layout is reused."""
+        img = tray_icon_mod.create_icon_image([10, 20, 30, 40])
+        self.assertEqual(img.size, (64, 64))
+
+    def test_empty_list_renders_blank_icon(self):
+        """No providers with data renders an empty (fully transparent) icon."""
+        img = tray_icon_mod.create_icon_image([])
+        self.assertEqual(img.size, (64, 64))
+        self.assertEqual(img.getextrema()[3], (0, 0))
 
 
 class TestCreateStatusImage(unittest.TestCase):

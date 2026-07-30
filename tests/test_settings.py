@@ -320,8 +320,10 @@ class TestDashboardSettings(unittest.TestCase):
                  patch.object(Path, 'home', return_value=Path(home_tmp)):
                 ok, errors, path = settings_mod.save_dashboard_settings({
                     'codex_enabled': False,
+                    'kimi_enabled': False,
                     'icon_fields': ['five_hour', 'seven_day'],
                     'alert_thresholds_codex_five_hour': [60, 90],
+                    'alert_thresholds_kimi_five_hour': [70, 95],
                     'prediction_enabled': True,
                     'prediction_day_end_time': '17:30',
                     'heatmap_enabled': False,
@@ -335,7 +337,9 @@ class TestDashboardSettings(unittest.TestCase):
             self.assertEqual(path.name, settings_mod.SETTINGS_FILENAME)
             saved = json.loads(path.read_text(encoding='utf-8'))
             self.assertFalse(saved['codex_enabled'])
+            self.assertFalse(saved['kimi_enabled'])
             self.assertEqual(saved['alert_thresholds_codex_five_hour'], [60, 90])
+            self.assertEqual(saved['alert_thresholds_kimi_five_hour'], [70, 95])
             self.assertEqual(saved['prediction_day_end_time'], '17:30')
             self.assertFalse(saved['heatmap_enabled'])
             self.assertTrue(saved['quiet_hours_enabled'])
@@ -1031,3 +1035,44 @@ class TestDynamicThresholdValidation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestKimiProviderSettings(unittest.TestCase):
+    """Tests for the Kimi provider toggle and its alert thresholds."""
+
+    def test_kimi_enabled_defaults_to_true(self):
+        with patch.dict(settings_mod._S, {}, clear=True):
+            settings_mod._S.pop('kimi_enabled', None)
+            self.assertTrue(settings_mod._S.get('kimi_enabled', True))
+
+    def test_kimi_thresholds_fall_back_to_period_defaults(self):
+        with patch.dict(settings_mod._S, {}, clear=True):
+            self.assertEqual(
+                settings_mod.get_alert_thresholds('five_hour', provider='kimi'),
+                settings_mod.get_alert_thresholds('five_hour'),
+            )
+
+    def test_kimi_thresholds_override_period_defaults(self):
+        with patch.dict(settings_mod._S, {'alert_thresholds_kimi_five_hour': [42]}, clear=True):
+            self.assertEqual(settings_mod.get_alert_thresholds('five_hour', provider='kimi'), [42])
+
+    def test_kimi_thresholds_do_not_affect_codex(self):
+        with patch.dict(settings_mod._S, {'alert_thresholds_kimi_five_hour': [42]}, clear=True):
+            self.assertNotEqual(settings_mod.get_alert_thresholds('five_hour', provider='codex'), [42])
+
+    def test_kimi_enabled_is_dashboard_writable(self):
+        self.assertIn('kimi_enabled', settings_mod._DASHBOARD_KEYS)
+
+    def test_kimi_enabled_rejects_non_boolean(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'kimi_enabled': 'yes'})
+        self.assertNotIn('kimi_enabled', accepted)
+        self.assertTrue(errors)
+
+    def test_dashboard_settings_exposes_kimi_keys(self):
+        exposed = settings_mod.dashboard_settings()
+        self.assertIn('kimi_enabled', exposed)
+        self.assertIn('alert_thresholds_kimi_five_hour', exposed)
+        self.assertIn('alert_thresholds_kimi_seven_day', exposed)
+
+    def test_provider_labels_cover_every_provider(self):
+        self.assertEqual(set(settings_mod.PROVIDER_LABELS), {'claude', 'codex', 'kimi'})

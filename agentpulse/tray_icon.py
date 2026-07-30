@@ -23,6 +23,15 @@ _RING_NORMAL = (74, 158, 255, 255)   # blue  — normal usage
 _RING_WARN   = (224, 128, 30, 255)   # orange — usage ≥ 80 %
 _RING_CRIT   = (230, 80, 80, 255)    # red   — usage ≥ 95 %
 
+# (outer radius, ring width) per ring, outermost first, in the 4× supersampled
+# space; PIL grows an arc's width inwards from the bounding box, so the radius
+# is the outer edge.  Divide by _SCALE for the size on a 64 px icon.
+_RING_GEOMETRY: dict[int, tuple[tuple[int, int], ...]] = {
+    1: ((94, 60),),
+    2: ((100, 48), (50, 40)),
+    3: ((100, 24), (68, 24), (36, 24)),
+}
+
 
 @functools.lru_cache(maxsize=None)
 def load_font(size: int, symbol: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -106,22 +115,20 @@ def _draw_ring(
     draw.arc(bbox, start=-90, end=end_angle, fill=_ring_color(pct), width=ring_width)
 
 
-def create_icon_image(
-    pct_top: float,
-    pct_bottom: float | None = None,
-    light_taskbar: bool = False,
-    *,
-    mode_top: str = 'utilization',
-    mode_bottom: str = 'utilization',
-    time_pct_top: float | None = None,
-    time_pct_bottom: float | None = None,
-) -> Image.Image:
-    """Create a 64 px RGBA tray icon with circular ring(s).
+def create_icon_image(percentages: list[float], light_taskbar: bool = False) -> Image.Image:
+    """Create a 64 px RGBA tray icon with one concentric ring per provider.
 
-    pct_top    — Claude 5 h utilisation; always the outer (or only) ring.
-    pct_bottom — Codex 5 h utilisation; when provided a second, inner ring is
-                 drawn concentrically inside the Claude ring.  Pass ``None``
-                 (the default) to show a single ring.
+    Rings are drawn outermost first, so the first entry is the outer (or only)
+    ring.  Providers the user has disabled are expected to be absent from the
+    list, which keeps the one- and two-provider geometry unchanged.
+
+    Parameters
+    ----------
+    percentages
+        Utilisation per provider, in display order.  At most
+        ``len(_RING_GEOMETRY)`` entries are drawn.
+    light_taskbar
+        Whether the Windows taskbar uses the light theme.
     """
     S = _SIZE * _SCALE          # canvas size at 4× for anti-aliasing
     img = Image.new('RGBA', (S, S), _CLEAR)
@@ -129,20 +136,9 @@ def create_icon_image(
     track = _track_rgba(light_taskbar)
     c = S // 2                  # centre coordinate
 
-    if pct_bottom is not None:
-        # ── Two concentric rings ──────────────────────────────────────────
-        # Outer ring (Claude 5 h)
-        #   arc centre-line radius = 100, ring width = 48
-        #   outer edge ≈ 4 px from image border (at 4×) → 1 px at 64 px
-        _draw_ring(draw, [c - 100, c - 100, c + 100, c + 100], pct_top,    48, track)
-        # Inner ring (Codex 5 h)
-        #   arc centre-line radius = 50, ring width = 40
-        #   ≈ 1.5 px gap between the two rings at 64 px
-        _draw_ring(draw, [c - 50,  c - 50,  c + 50,  c + 50],  pct_bottom, 40, track)
-    else:
-        # ── Single ring ───────────────────────────────────────────────────
-        #   arc centre-line radius = 94, ring width = 60  (≈ 15 px at 64 px)
-        _draw_ring(draw, [c - 94, c - 94, c + 94, c + 94], pct_top, 60, track)
+    geometry = _RING_GEOMETRY.get(len(percentages)) or _RING_GEOMETRY[max(_RING_GEOMETRY)]
+    for pct, (radius, width) in zip(percentages, geometry):
+        _draw_ring(draw, [c - radius, c - radius, c + radius, c + radius], pct, width, track)
 
     return img.resize((_SIZE, _SIZE), Image.LANCZOS)
 

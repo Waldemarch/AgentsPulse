@@ -140,10 +140,10 @@ Available in all event commands:
 |---|---|---|
 | `AGENTPULSE_VERSION` | `1.13.0` | Running app version |
 | `AGENTPULSE_EVENT` | `reset` or `threshold` | Event type |
-| `AGENTPULSE_PROVIDER` | `claude` or `codex` | Provider that triggered the event |
+| `AGENTPULSE_PROVIDER` | `claude`, `codex`, or `kimi` | Provider that triggered the event |
 | `USAGE_MONITOR_VERSION` | `1.13.0` | Running app version |
 
-`USAGE_MONITOR_*` variables remain available for backwards compatibility. New scripts should prefer `AGENTPULSE_*`, especially when they need to distinguish Claude from Codex.
+`USAGE_MONITOR_*` variables remain available for backwards compatibility. New scripts should prefer `AGENTPULSE_*`, especially when they need to tell the providers apart.
 
 ### `on_reset_command`
 
@@ -197,4 +197,4 @@ Fires when usage crosses a configured alert threshold.
 
 Extra usage variables are only set when the affected variant is `extra_usage`.
 
-Provider-aware alerts use separate internal state per provider, so a Codex threshold crossing does not suppress a Claude alert for the same quota name. Combine `AGENTPULSE_PROVIDER` with provider-specific thresholds such as `alert_thresholds_codex_five_hour` when you want different behavior per provider.
+Provider-aware alerts use separate internal state per provider, so a Codex or Kimi threshold crossing does not suppress a Claude alert for the same quota name. Combine `AGENTPULSE_PROVIDER` with provider-specific thresholds such as `alert_thresholds_codex_five_hour` or `alert_thresholds_kimi_five_hour` when you want different behavior per provider.

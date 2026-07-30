@@ -1,9 +1,13 @@
 const colors = {
     claude: '#2f7ef7',
     codex: '#13a579',
+    kimi: '#a855f7',
     seven: '#8b5cf6',
     warn: '#d64545',
 };
+// Weekly series get a darker shade of the provider's colour so the two lines
+// of one provider stay visually related but distinguishable.
+const weeklyColors = { codex: '#0f766e', kimi: '#7e22ce' };
 
 function themeColor(name, fallback) {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -128,11 +132,14 @@ async function loadSettings() {
     const s = data.settings || {};
     document.getElementById('autostartEnabled').checked = !!s.autostart;
     document.getElementById('codexEnabled').checked = !!s.codex_enabled;
+    document.getElementById('kimiEnabled').checked = !!s.kimi_enabled;
     document.getElementById('tooltipFields').value = (s.tooltip_fields || []).join(', ');
     document.getElementById('thresholdClaude5h').value = (s.alert_thresholds_five_hour || []).join(', ');
     document.getElementById('thresholdClaude7d').value = (s.alert_thresholds_seven_day || []).join(', ');
     document.getElementById('thresholdCodex5h').value = (s.alert_thresholds_codex_five_hour || []).join(', ');
     document.getElementById('thresholdCodex7d').value = (s.alert_thresholds_codex_seven_day || []).join(', ');
+    document.getElementById('thresholdKimi5h').value = (s.alert_thresholds_kimi_five_hour || []).join(', ');
+    document.getElementById('thresholdKimi7d').value = (s.alert_thresholds_kimi_seven_day || []).join(', ');
     document.getElementById('predictionEnabled').checked = s.prediction_enabled !== false;
     document.getElementById('predictionDayEnd').value = s.prediction_day_end_time || '18:00';
     document.getElementById('heatmapEnabled').checked = s.heatmap_enabled !== false;
@@ -407,7 +414,8 @@ function groupRows(rows, keyFn = r => `${r.provider}:${r.field}`) {
 }
 
 function lineColor(key, index) {
-    if (key.includes('codex')) return key.includes('seven') ? '#0f766e' : colors.codex;
+    const provider = Object.keys(weeklyColors).find((name) => key.includes(name));
+    if (provider) return key.includes('seven') ? weeklyColors[provider] : colors[provider];
     if (key.includes('seven')) return colors.seven;
     return [colors.claude, '#f59e0b', '#db2777', '#475569'][index % 4];
 }
@@ -470,11 +478,14 @@ document.getElementById('settingsForm').addEventListener('submit', async (event)
     const payload = {
         autostart: document.getElementById('autostartEnabled').checked,
         codex_enabled: document.getElementById('codexEnabled').checked,
+        kimi_enabled: document.getElementById('kimiEnabled').checked,
         tooltip_fields: parseList(document.getElementById('tooltipFields').value),
         alert_thresholds_five_hour: parseNumbers(document.getElementById('thresholdClaude5h').value),
         alert_thresholds_seven_day: parseNumbers(document.getElementById('thresholdClaude7d').value),
         alert_thresholds_codex_five_hour: parseNumbers(document.getElementById('thresholdCodex5h').value),
         alert_thresholds_codex_seven_day: parseNumbers(document.getElementById('thresholdCodex7d').value),
+        alert_thresholds_kimi_five_hour: parseNumbers(document.getElementById('thresholdKimi5h').value),
+        alert_thresholds_kimi_seven_day: parseNumbers(document.getElementById('thresholdKimi7d').value),
         prediction_enabled: document.getElementById('predictionEnabled').checked,
         prediction_day_end_time: document.getElementById('predictionDayEnd').value || '18:00',
         heatmap_enabled: document.getElementById('heatmapEnabled').checked,

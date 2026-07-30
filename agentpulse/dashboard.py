@@ -29,8 +29,9 @@ from .claude_cli import find_installations
 from .codex_cli import codex_version
 from .formatting import field_period, popup_label, time_until
 from .i18n import T
+from .kimi_cli import kimi_version
 from .settings import (
-    DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST,
+    DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST, PROVIDER_LABELS,
     dashboard_settings, history_write_path, save_dashboard_settings,
 )
 
@@ -43,10 +44,12 @@ log = logging.getLogger(__name__)
 
 _DASHBOARD_DIR = Path(__file__).parent / 'dashboard'
 _MAX_AGE_SECONDS = 30 * 24 * 3600
-# 30 days of two providers polling every 180s is ~29k snapshots; leave headroom for fast-poll bursts.
-_MAX_SAMPLES = 40000
+# 30 days of three providers polling every 180s is ~43k snapshots; the buffer keeps the most recent ones.
+_MAX_SAMPLES = 60000
 # Stale history-file lines tolerated before the file is compacted (rewritten from memory).
 _HISTORY_COMPACT_SLACK = 4000
+# Reports the installed CLI version of each non-Claude provider.
+_SECONDARY_CLI_VERSIONS = {'codex': codex_version, 'kimi': kimi_version}
 _RANGES = {
     '24h': 24 * 3600,
     '7d': 7 * 24 * 3600,
@@ -515,8 +518,9 @@ def _dashboard_i18n() -> dict[str, str]:
         'by_time', 'by_reset', 'ago',
         'diag_app', 'diag_bind', 'diag_analytics', 'diag_tokens', 'diag_next_update',
         'enabled', 'disabled', 'not_exposed', 'check_config', 'unknown', 'cli',
-        'codex_monitoring', 'quiet_hours', 'tooltip_fields',
+        'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
+        'thr_kimi_5h', 'thr_kimi_7d',
         'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command',
         'save_settings', 'test_reset', 'test_threshold',
         'saved', 'error', 'session_expired', 'test_fired', 'test_failed', 'unknown_error',
@@ -532,7 +536,6 @@ def _dashboard_i18n() -> dict[str, str]:
 def _status_payload(app: AgentPulse) -> dict[str, Any]:
     """Build a token-free dashboard status payload."""
     claude_snap = app.cache.snapshot
-    codex_snap = app.codex_cache.snapshot if app.codex_cache is not None else None
     settings = dashboard_settings()
     return {
         'app': {'name': 'Agents Pulse', 'version': __version__},
@@ -552,9 +555,19 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
         },
         'providers': [
             _provider_payload('claude', claude_snap, [{'name': i.name, 'version': i.version} for i in find_installations()]),
-            *([_provider_payload('codex', codex_snap, [{'name': 'CLI', 'version': codex_version()}] if codex_version() else [])] if codex_snap is not None else []),
+            *_secondary_provider_payloads(app),
         ],
     }
+
+
+def _secondary_provider_payloads(app: AgentPulse) -> list[dict[str, Any]]:
+    """Build the dashboard payload of every active non-Claude provider."""
+    payloads = []
+    for provider, cache in app._secondary_caches():
+        version = _SECONDARY_CLI_VERSIONS[provider]()
+        installations = [{'name': 'CLI', 'version': version}] if version else []
+        payloads.append(_provider_payload(provider, cache.snapshot, installations))
+    return payloads
 
 
 def _provider_payload(provider: str, snap: Any, installations: list[dict[str, str]]) -> dict[str, Any]:
@@ -577,7 +590,7 @@ def _provider_payload(provider: str, snap: Any, installations: list[dict[str, st
 
     return {
         'id': provider,
-        'label': 'Claude' if provider == 'claude' else 'Codex',
+        'label': PROVIDER_LABELS.get(provider, provider.title()),
         'enabled': True,
         'usage': usage,
         'last_success_time': snap.last_success_time,

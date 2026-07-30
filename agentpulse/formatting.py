@@ -12,7 +12,7 @@ __all__ = [
     'PERIOD_5H', 'PERIOD_7D',
     'burn_rate_info', 'elapsed_pct', 'expand_popup_fields', 'field_period',
     'format_burn_text', 'format_credits', 'format_tooltip',
-    'midnight_positions', 'parse_field_name', 'popup_label',
+    'midnight_positions', 'parse_field_name', 'period_to_field_name', 'popup_label',
     'time_until', 'tooltip_label',
 ]
 
@@ -25,6 +25,7 @@ _NUMBERS = {
     'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12,
 }
 _UNITS = {'hour': ('h', 3600), 'day': ('d', 24 * 3600)}
+_NUMBER_WORDS = {number: word for word, number in _NUMBERS.items()}
 _TITLE_OVERRIDES = {'api': 'API', 'oauth': 'OAuth', 'ai': 'AI', 'omelette': ''}
 
 
@@ -82,6 +83,37 @@ def field_period(field: str) -> int | None:
         return None
     number, unit, _variant = parsed
     return number * _UNITS[unit][1]
+
+
+def period_to_field_name(seconds: int) -> str | None:
+    """Return the canonical field name for a quota window length.
+
+    Inverse of :func:`field_period`.  Providers that report windows as a raw
+    duration get the same field names as providers that report them by name,
+    so no second table of window names is needed.
+
+    Parameters
+    ----------
+    seconds
+        Window length in seconds.
+
+    Returns
+    -------
+    str or None
+        A name such as ``'five_hour'`` or ``'seven_day'``, or None when the
+        duration is not a whole number of hours or days that the shared
+        vocabulary can express.
+    """
+    if seconds <= 0:
+        return None
+    for unit in ('day', 'hour'):
+        unit_seconds = _UNITS[unit][1]
+        if seconds < unit_seconds or seconds % unit_seconds:
+            continue
+        word = _NUMBER_WORDS.get(seconds // unit_seconds)
+        if word is not None:
+            return f'{word}_{unit}'
+    return None
 
 
 def _field_order(field: str) -> tuple[int, int, int, str]:
@@ -258,9 +290,22 @@ def _format_provider_lines(data: dict[str, Any]) -> list[str]:
     return lines
 
 
-def format_tooltip(data: dict[str, Any], codex_data: dict[str, Any] | None = None) -> str:
-    """Render compact tooltip text within the Windows tray limit."""
-    if 'error' in data and (codex_data is None or 'error' in codex_data):
+def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, Any]]] | None = None) -> str:
+    """Render compact tooltip text within the Windows tray limit.
+
+    Parameters
+    ----------
+    data
+        Claude usage data, always rendered first and without a heading.
+    secondary
+        Additional providers as ``(heading, usage_data)`` pairs, rendered in
+        order below the Claude section.  The tray tooltip is capped at 128
+        characters and whole trailing lines are dropped to fit, so providers
+        listed last may not be visible with many tooltip fields configured.
+    """
+    others = secondary or []
+    healthy = [entry for _heading, entry in others if entry and 'error' not in entry]
+    if 'error' in data and not healthy:
         if data.get('auth_error'):
             return f"{T['auth_expired_label']}\n{T['auth_expired_short']}"
         error = str(data.get('error', ''))
@@ -271,9 +316,11 @@ def format_tooltip(data: dict[str, Any], codex_data: dict[str, Any] | None = Non
     lines = [T['tooltip_title']]
     if 'error' not in data:
         lines.extend(_format_provider_lines(data))
-    if codex_data and 'error' not in codex_data:
-        lines.append(T.get('tooltip_title_codex', 'Codex Usage'))
-        lines.extend(_format_provider_lines(codex_data))
+    for heading, entry in others:
+        if not entry or 'error' in entry:
+            continue
+        lines.append(heading)
+        lines.extend(_format_provider_lines(entry))
 
     text = '\n'.join(lines)
     while len(text) > 128 and '\n' in text:

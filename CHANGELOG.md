@@ -4,9 +4,10 @@
 
 ### Added
 
+- **Kimi For Coding support** - when you are signed in to the Kimi Code CLI, Kimi's weekly request quota and 5-hour rate limit appear alongside Claude and Codex: a third tray ring, its own popup tab, a dashboard card with history, and separate alert thresholds. Turn it off with the **Kimi monitoring** toggle in the dashboard settings.
 - The local dashboard is now fully translated and follows the same language as the rest of the app across all 13 supported languages.
 - The dashboard now shows a connection banner and keeps retrying when it briefly loses contact with the app, instead of silently freezing.
-- The tray icon now shows compact Claude and Codex 5-hour usage rows for at-a-glance taskbar monitoring.
+- The tray icon now shows one compact 5-hour usage ring per provider for at-a-glance taskbar monitoring.
 - The dashboard settings panel now includes a **Start with Windows** toggle, so autostart can be enabled without opening the tray menu. The change applies immediately, no restart needed.
 - Dashboard usage history is now saved to a local file (`agentpulse-history.jsonl`, quota percentages only - never tokens or account data) and survives application restarts. Set `history_persist` to `false` to keep history in memory only.
 

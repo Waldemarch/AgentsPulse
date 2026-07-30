@@ -1,10 +1,10 @@
 # Agents Pulse
 
-Monitor Claude and Codex API usage from your Windows system tray. See at a glance how much of your session and weekly quota you've used, get desktop alerts before you run out, and automate actions when quotas reset.
+Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at a glance how much of your session and weekly quota you've used, get desktop alerts before you run out, and automate actions when quotas reset.
 
 ## Screenshots
 
-![All tab — combined Claude and Codex session and weekly usage](Screens/popup-all.png)
+![All tab — combined Claude, Codex, and Kimi session and weekly usage](Screens/popup-all.png)
 
 ![Claude tab — account info, session and weekly quota, extra usage spend](Screens/popup-claude.png)
 
@@ -19,7 +19,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 
 ### Daily visible value
 
-- **Live tray icon** - compact usage rows show current 5-hour Claude and Codex usage directly in the taskbar and adapt to your taskbar's light or dark theme.
+- **Live tray icon** - one ring per provider shows current 5-hour Claude, Codex, and Kimi usage directly in the taskbar and adapts to your taskbar's light or dark theme.
 - **Detail popup** - left-click the icon to see a polished breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
@@ -41,7 +41,7 @@ Monitor Claude and Codex API usage from your Windows system tray. See at a glanc
 ### Reach and preferences
 
 - **13 languages** - English, German, Spanish, French, Hindi, Indonesian, Italian, Japanese, Korean, Portuguese (Brazil), Ukrainian, Simplified Chinese, Traditional Chinese, across the tray, popup, and dashboard. Language is auto-detected from your system locale.
-- **Codex support** - tracks OpenAI Codex usage alongside Claude when a Codex CLI token is present.
+- **Codex and Kimi support** - tracks OpenAI Codex and Kimi For Coding usage alongside Claude whenever their CLI login state is present, each with its own tab, thresholds, and history.
 - **Customizable** - adjust polling intervals, alert thresholds, popup colors, which quota fields appear in the icon and tooltip, and more via a JSON settings file or the dashboard settings panel.
 
 ## Requirements
@@ -110,8 +110,8 @@ python -m unittest discover -s tests
 
 ## Privacy and security
 
-- Network traffic is limited to `api.anthropic.com` (Claude usage) and `chatgpt.com` (Codex usage, only when a token is present). No telemetry, no analytics.
-- Credentials are read from the Claude Code and Codex CLI login state on your machine and used only in HTTP Authorization headers. They are never logged, stored elsewhere, or transmitted to any other destination.
+- Network traffic is limited to `api.anthropic.com` (Claude usage), `chatgpt.com` (Codex usage), and `api.kimi.com` (Kimi usage) - the latter two only when a token is present. No telemetry, no analytics.
+- Credentials are read from the Claude Code, Codex, and Kimi Code CLI login state on your machine and used only in HTTP Authorization headers. They are never logged, stored elsewhere, or transmitted to any other destination.
 - The dashboard runs on `localhost` only and is not exposed on the network. It rejects requests from other websites and forged hostnames, sends strict security headers (Content-Security-Policy, X-Frame-Options, Referrer-Policy), requires a per-run session token to read settings or change anything, and never reveals filesystem paths.
 - The app never writes files (it is read-only). Settings are only written when you explicitly save from the dashboard or create the settings file manually.
 - All URLs and API endpoints are defined as top-level constants in the source - no dynamic URL construction.
