@@ -11,13 +11,32 @@ import re
 import subprocess
 from pathlib import Path
 
-KIMI_CLI_PATH = Path(os.environ.get('APPDATA', '')) / 'npm' / 'kimi.cmd'
+from .kimi_api import KIMI_CODE_HOME
+
+# Install locations to try, in order.  The Kimi Code installer ships a
+# self-contained binary inside the CLI home directory; the npm package is the
+# fallback for installs done through node.
+KIMI_CLI_PATHS = (
+    KIMI_CODE_HOME / 'bin' / 'kimi.exe',
+    Path(os.environ.get('APPDATA', '')) / 'npm' / 'kimi.cmd',
+)
 
 PROJECT_URL = 'https://github.com/MoonshotAI/kimi-cli'
 
-__all__ = ['KIMI_CLI_PATH', 'PROJECT_URL', 'kimi_version']
+__all__ = ['KIMI_CLI_PATHS', 'PROJECT_URL', 'kimi_cli_path', 'kimi_version']
 
 _version_cache: dict[Path, tuple[float, str]] = {}
+
+
+def kimi_cli_path() -> Path | None:
+    """Return the first installed Kimi Code CLI, or None when none is present."""
+    for path in KIMI_CLI_PATHS:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
 
 
 def kimi_version() -> str:
@@ -26,8 +45,8 @@ def kimi_version() -> str:
     Results are cached by file modification time so the subprocess is
     only spawned once per binary change.
     """
-    path = KIMI_CLI_PATH
-    if not path.is_file():
+    path = kimi_cli_path()
+    if path is None:
         return ''
     try:
         mtime = path.stat().st_mtime
