@@ -126,6 +126,8 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 
 Kimi credentials are read only. The app never uses the refresh token and never rewrites the credential file, so an expired Kimi session is renewed by signing in with the Kimi Code CLI again.
 
+The installed Kimi Code CLI version shown in the popup and dashboard is read from the first of these that exists: `~/.kimi-code/bin/kimi.exe` (or `KIMI_CODE_HOME/bin/kimi.exe`), then `%APPDATA%\npm\kimi.cmd` for npm installs. A missing CLI only hides the version row - usage monitoring itself needs the credential file, not the binary.
+
 ### Kimi quota mapping
 
 The Kimi Code API reports a weekly request allowance and a set of rolling rate-limit windows. They are mapped onto the same field names the other providers use, so tooltip fields, popup fields, and alert thresholds work identically:
