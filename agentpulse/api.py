@@ -52,9 +52,10 @@ def read_access_token() -> str | None:
 
 def _user_agent() -> str:
     try:
-        from .claude_cli import CLAUDE_CLI_PATH, cli_version
+        from .claude_cli import claude_cli_path, cli_version
 
-        version = cli_version(CLAUDE_CLI_PATH)
+        path = claude_cli_path()
+        version = cli_version(path) if path is not None else ''
     except Exception:
         version = ''
     return f'claude-code/{version}' if version else _DEFAULT_UA

@@ -15,14 +15,20 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agentpulse.dashboard import (
-    _SECONDARY_CLI_VERSIONS, DashboardHistory, DashboardServer,
-    _apply_autostart, _autostart_enabled, _dashboard_i18n, _status_payload,
+    DashboardHistory, DashboardServer,
+    _apply_autostart, _autostart_enabled, _cycle_trend, _dashboard_i18n, _status_payload,
 )
+from agentpulse.providers import SECONDARY_PROVIDERS_BY_NAME
+
+
+def _fake_spec(version: str) -> MagicMock:
+    """A stand-in SecondaryProviderSpec exposing only what dashboard.py reads."""
+    return MagicMock(cli_version=lambda: version)
 
 
 def _no_cli_versions():
     """Report no installed CLI for every non-Claude provider."""
-    return {name: (lambda: '') for name in _SECONDARY_CLI_VERSIONS}
+    return {name: _fake_spec('') for name in SECONDARY_PROVIDERS_BY_NAME}
 
 
 def _fake_autostart_module(enabled: bool = False) -> types.ModuleType:
@@ -88,8 +94,8 @@ class TestStatusPayload(unittest.TestCase):
 
         app = MagicMock()
         app.cache.snapshot = snap
-        app._secondary_caches.return_value = []
-        app._next_poll_time = 1200
+        app.secondary_providers.return_value = []
+        app.next_poll_time = 1200
 
         with patch('agentpulse.dashboard.find_installations', return_value=[]):
             payload = _status_payload(app)
@@ -108,13 +114,13 @@ class TestStatusPayload(unittest.TestCase):
 
         app = MagicMock()
         app.cache.snapshot = snap
-        app._next_poll_time = 1200
+        app.next_poll_time = 1200
         caches = []
         for name in provider_names:
             cache = MagicMock()
             cache.snapshot = snap
             caches.append((name, cache))
-        app._secondary_caches.return_value = caches
+        app.secondary_providers.return_value = caches
         return app
 
     def test_only_claude_when_no_other_provider_is_active(self):
@@ -127,7 +133,7 @@ class TestStatusPayload(unittest.TestCase):
     def test_active_providers_follow_claude_in_order(self):
         app = self._app_with_providers('codex', 'kimi')
         with patch('agentpulse.dashboard.find_installations', return_value=[]), \
-             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+             patch.dict(SECONDARY_PROVIDERS_BY_NAME, _no_cli_versions()):
             payload = _status_payload(app)
 
         self.assertEqual([entry['id'] for entry in payload['providers']], ['claude', 'codex', 'kimi'])
@@ -135,7 +141,7 @@ class TestStatusPayload(unittest.TestCase):
     def test_provider_labels_are_display_names(self):
         app = self._app_with_providers('codex', 'kimi')
         with patch('agentpulse.dashboard.find_installations', return_value=[]), \
-             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+             patch.dict(SECONDARY_PROVIDERS_BY_NAME, _no_cli_versions()):
             payload = _status_payload(app)
 
         self.assertEqual([entry['label'] for entry in payload['providers']], ['Claude', 'Codex', 'Kimi'])
@@ -143,7 +149,7 @@ class TestStatusPayload(unittest.TestCase):
     def test_cli_version_reported_per_provider(self):
         app = self._app_with_providers('kimi')
         with patch('agentpulse.dashboard.find_installations', return_value=[]), \
-             patch.dict(_SECONDARY_CLI_VERSIONS, {'kimi': lambda: '2.0.1'}):
+             patch.dict(SECONDARY_PROVIDERS_BY_NAME, {'kimi': _fake_spec('2.0.1')}):
             payload = _status_payload(app)
 
         self.assertEqual(payload['providers'][1]['installations'], [{'name': 'CLI', 'version': '2.0.1'}])
@@ -151,10 +157,105 @@ class TestStatusPayload(unittest.TestCase):
     def test_missing_cli_version_yields_no_installation_rows(self):
         app = self._app_with_providers('kimi')
         with patch('agentpulse.dashboard.find_installations', return_value=[]), \
-             patch.dict(_SECONDARY_CLI_VERSIONS, _no_cli_versions()):
+             patch.dict(SECONDARY_PROVIDERS_BY_NAME, _no_cli_versions()):
             payload = _status_payload(app)
 
         self.assertEqual(payload['providers'][1]['installations'], [])
+
+
+class TestCycleTrend(unittest.TestCase):
+    """Tests for _cycle_trend() - pace comparison against past quota cycles."""
+
+    DAY = 24 * 3600
+
+    def _record(self, history, provider, field, utilization, ts):
+        history.record(provider, {field: {'utilization': utilization, 'resets_at': ''}}, ts=ts)
+
+    def test_none_with_fewer_than_two_samples(self):
+        history = DashboardHistory()
+        self._record(history, 'claude', 'seven_day', 10.0, ts=1000)
+
+        self.assertIsNone(_cycle_trend(history, 'claude', 'seven_day', now=1000))
+
+    def test_none_without_a_completed_previous_cycle(self):
+        """A single, still-rising cycle has nothing to compare against."""
+        history = DashboardHistory()
+        self._record(history, 'claude', 'seven_day', 10.0, ts=1000)
+        self._record(history, 'claude', 'seven_day', 20.0, ts=2000)
+
+        self.assertIsNone(_cycle_trend(history, 'claude', 'seven_day', now=2000))
+
+    def test_compares_current_cycle_against_one_previous_cycle(self):
+        history = DashboardHistory()
+        base = 1_000_000
+        # Previous cycle: 0 -> 50% at +1 day -> 100% at +2 days, then resets.
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base)
+        self._record(history, 'claude', 'seven_day', 50.0, ts=base + self.DAY)
+        self._record(history, 'claude', 'seven_day', 100.0, ts=base + 2 * self.DAY)
+        # Reset detected here (100 -> 0), starting the current cycle.
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base + 2 * self.DAY + 10)
+        # One day into the current cycle, usage is running hotter than last time.
+        now = base + 3 * self.DAY + 10
+        self._record(history, 'claude', 'seven_day', 65.0, ts=now)
+
+        trend = _cycle_trend(history, 'claude', 'seven_day', now=now)
+
+        self.assertIsNotNone(trend)
+        self.assertEqual(trend['current_pct'], 65.0)
+        self.assertEqual(trend['historical_avg_pct'], 50.0)
+        self.assertEqual(trend['delta_pct'], 15.0)
+        self.assertEqual(trend['cycles_compared'], 1)
+
+    def test_averages_across_multiple_previous_cycles(self):
+        history = DashboardHistory()
+        base = 1_000_000
+        cycle_len = 3 * self.DAY
+        # Two previous cycles, each reaching a different pct one day in.
+        for cycle_index, one_day_pct in enumerate((40.0, 60.0)):
+            start = base + cycle_index * cycle_len
+            self._record(history, 'claude', 'seven_day', 0.0, ts=start)
+            self._record(history, 'claude', 'seven_day', one_day_pct, ts=start + self.DAY)
+            self._record(history, 'claude', 'seven_day', 100.0, ts=start + 2 * self.DAY)
+        current_start = base + 2 * cycle_len
+        self._record(history, 'claude', 'seven_day', 0.0, ts=current_start)
+        now = current_start + self.DAY
+        self._record(history, 'claude', 'seven_day', 70.0, ts=now)
+
+        trend = _cycle_trend(history, 'claude', 'seven_day', now=now)
+
+        self.assertEqual(trend['cycles_compared'], 2)
+        self.assertEqual(trend['historical_avg_pct'], 50.0)  # average of 40 and 60
+        self.assertEqual(trend['delta_pct'], 20.0)
+
+    def test_ignores_rows_from_a_different_provider_or_field(self):
+        history = DashboardHistory()
+        base = 1_000_000
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base)
+        self._record(history, 'claude', 'seven_day', 50.0, ts=base + self.DAY)
+        self._record(history, 'claude', 'seven_day', 100.0, ts=base + 2 * self.DAY)
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base + 2 * self.DAY + 10)
+        now = base + 3 * self.DAY + 10
+        self._record(history, 'claude', 'seven_day', 65.0, ts=now)
+        # Noise that must not be mixed into the comparison.
+        self._record(history, 'codex', 'seven_day', 5.0, ts=now)
+        self._record(history, 'claude', 'five_hour', 90.0, ts=now)
+
+        trend = _cycle_trend(history, 'claude', 'seven_day', now=now)
+
+        self.assertEqual(trend['cycles_compared'], 1)
+        self.assertEqual(trend['current_pct'], 65.0)
+
+    def test_none_when_current_cycle_has_no_elapsed_time(self):
+        history = DashboardHistory()
+        base = 1_000_000
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base)
+        self._record(history, 'claude', 'seven_day', 100.0, ts=base + self.DAY)
+        self._record(history, 'claude', 'seven_day', 0.0, ts=base + self.DAY + 10)
+
+        # now == the current cycle's own single sample timestamp -> zero elapsed.
+        trend = _cycle_trend(history, 'claude', 'seven_day', now=base + self.DAY + 10)
+
+        self.assertIsNone(trend)
 
 
 class TestAutostartHelpers(unittest.TestCase):
@@ -290,8 +391,8 @@ class TestRequestValidation(unittest.TestCase):
         snap.last_error = None
         self.app = MagicMock()
         self.app.cache.snapshot = snap
-        self.app._secondary_caches.return_value = []
-        self.app._next_poll_time = None
+        self.app.secondary_providers.return_value = []
+        self.app.next_poll_time = None
         self.server = DashboardServer(self.app, port=0, history_path=_temp_history_path(self))
         self.url = self.server.start()
         self.port = self.server._httpd.server_address[1]

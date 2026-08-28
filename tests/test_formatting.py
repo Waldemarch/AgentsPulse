@@ -750,7 +750,7 @@ class TestFormatTooltip(unittest.TestCase):
         self.assertEqual(format_tooltip(data), 'Claude Usage\n5h: 26%')
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['seven_day_sonnet', 'five_hour'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_custom_fields_and_order(self, _mock_tu):
         """Custom tooltip_fields controls which fields appear and in what order."""
         data = {
@@ -762,7 +762,18 @@ class TestFormatTooltip(unittest.TestCase):
 
     @patch('agentpulse.formatting.time_until', return_value='Resets in 2h 30m (14:30)')
     def test_result_truncated_to_128_chars_at_line_boundary(self, _mock_tu):
-        """Result longer than 128 chars is trimmed by dropping trailing lines."""
+        """A single overflowing provider is trimmed by dropping trailing lines."""
+        data = {
+            'five_hour': {'utilization': 34.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+            'seven_day': {'utilization': 80.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+        }
+        result = format_tooltip(data)
+        self.assertLessEqual(len(result), 128)
+        self.assertFalse(result.endswith('\n'))
+
+    @patch('agentpulse.formatting.time_until', return_value='Resets in 2h 30m (14:30)')
+    def test_multiple_providers_overflowing_verbose_form_switch_to_compact(self, _mock_tu):
+        """When the verbose form of every provider doesn't fit, none is dropped - all compact instead."""
         data = {
             'five_hour': {'utilization': 34.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
             'seven_day': {'utilization': 80.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
@@ -771,61 +782,85 @@ class TestFormatTooltip(unittest.TestCase):
             'five_hour': {'utilization': 10.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
             'seven_day': {'utilization': 14.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
         }
-        result = format_tooltip(data, [('Codex Usage', codex_data)])
+        result = format_tooltip(data, [('codex', codex_data)])
         self.assertLessEqual(len(result), 128)
-        self.assertFalse(result.endswith('\n'))
+        self.assertEqual(result, 'Claude Usage\nClaude 5h 34% 7d 80%\nCodex 5h 10% 7d 14%')
+
+    @patch('agentpulse.formatting.time_until', return_value='Resets in 2h 30m (14:30)')
+    def test_three_providers_overflowing_verbose_form_all_compacted(self, _mock_tu):
+        """Three providers whose full form overflows all still appear, compacted."""
+        data = {
+            'five_hour': {'utilization': 34.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+            'seven_day': {'utilization': 80.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+        }
+        codex_data = {
+            'five_hour': {'utilization': 10.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+            'seven_day': {'utilization': 14.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+        }
+        kimi_data = {
+            'five_hour': {'utilization': 22.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+            'seven_day': {'utilization': 60.0, 'resets_at': '2025-01-15T14:30:00+00:00'},
+        }
+        result = format_tooltip(data, [('codex', codex_data), ('kimi', kimi_data)])
+        self.assertLessEqual(len(result), 128)
+        for expected in ('Claude', 'Codex', 'Kimi', '34%', '80%', '10%', '14%', '22%', '60%'):
+            self.assertIn(expected, result)
+        self.assertEqual(
+            result,
+            'Claude Usage\nClaude 5h 34% 7d 80%\nCodex 5h 10% 7d 14%\nKimi 5h 22% 7d 60%',
+        )
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['five_hour'])
     def test_three_providers_each_get_a_section(self, _mock_tu):
-        """Every healthy provider contributes a heading and its own lines."""
+        """Every healthy provider contributes a heading and its own lines when it fits."""
         data = {'five_hour': {'utilization': 10.0, 'resets_at': ''}}
         codex_data = {'five_hour': {'utilization': 20.0, 'resets_at': ''}}
         kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
-        result = format_tooltip(data, [('Codex Usage', codex_data), ('Kimi Usage', kimi_data)])
+        result = format_tooltip(data, [('codex', codex_data), ('kimi', kimi_data)])
         self.assertEqual(
             result,
             'Claude Usage\n5h: 10%\nCodex Usage\n5h: 20%\nKimi Usage\n5h: 30%',
         )
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['five_hour'])
     def test_failing_secondary_provider_is_skipped(self, _mock_tu):
         """A provider whose fetch failed contributes no heading and no lines."""
         data = {'five_hour': {'utilization': 10.0, 'resets_at': ''}}
         kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
-        result = format_tooltip(data, [('Codex Usage', {'error': 'boom'}), ('Kimi Usage', kimi_data)])
+        result = format_tooltip(data, [('codex', {'error': 'boom'}), ('kimi', kimi_data)])
         self.assertEqual(result, 'Claude Usage\n5h: 10%\nKimi Usage\n5h: 30%')
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['five_hour'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['five_hour'])
     def test_claude_error_with_healthy_secondary_still_renders(self, _mock_tu):
         """A Claude error is not fatal while another provider has data."""
         kimi_data = {'five_hour': {'utilization': 30.0, 'resets_at': ''}}
-        result = format_tooltip({'error': 'boom'}, [('Kimi Usage', kimi_data)])
+        result = format_tooltip({'error': 'boom'}, [('kimi', kimi_data)])
         self.assertEqual(result, 'Claude Usage\nKimi Usage\n5h: 30%')
 
     def test_all_providers_failing_renders_claude_error(self):
         """When nothing has data the Claude error is shown."""
-        result = format_tooltip({'error': 'Connection failed'}, [('Kimi Usage', {'error': 'boom'})])
+        result = format_tooltip({'error': 'Connection failed'}, [('kimi', {'error': 'boom'})])
         self.assertIn('Connection failed', result)
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['seven_day_sonnet'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['seven_day_sonnet'])
     def test_custom_field_null_skipped(self, _mock_tu):
         """Configured field that is null in API response is skipped."""
         data = {'seven_day_sonnet': None, 'five_hour': {'utilization': 50.0, 'resets_at': ''}}
         self.assertEqual(format_tooltip(data), 'Claude Usage')
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', ['nonexistent_field'])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', ['nonexistent_field'])
     def test_custom_field_missing_from_response_skipped(self, _mock_tu):
         """Configured field not present in API response is skipped."""
         data = {'five_hour': {'utilization': 50.0, 'resets_at': ''}}
         self.assertEqual(format_tooltip(data), 'Claude Usage')
 
     @patch('agentpulse.formatting.time_until', return_value='')
-    @patch('agentpulse.formatting.TOOLTIP_FIELDS', [])
+    @patch('agentpulse.settings.TOOLTIP_FIELDS', [])
     def test_empty_fields_shows_title_only(self, _mock_tu):
         """Empty tooltip_fields shows only the title."""
         data = {'five_hour': {'utilization': 50.0, 'resets_at': ''}}

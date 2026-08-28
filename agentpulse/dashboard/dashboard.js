@@ -282,6 +282,7 @@ function renderPredictions(status) {
                 title: `${provider.label} ${entry.label}`,
                 day: fmt(tr('by_time', '{pct}% by {time}'), { pct: Math.round(dayPct), time: target }),
                 period: fmt(tr('by_reset', '{pct}% by reset'), { pct: Math.round(periodPct) }),
+                trend: trendText(entry.trend),
                 tone: dayPct >= 100 || periodPct >= 100 ? 'warn' : 'ok',
             });
         }
@@ -295,6 +296,7 @@ function renderPredictions(status) {
             <div class="muted">${escapeHtml(card.title)}</div>
             <strong>${escapeHtml(card.day)}</strong>
             <span>${escapeHtml(card.period)}</span>
+            ${card.trend ? `<span class="trend">${escapeHtml(card.trend)}</span>` : ''}
         `;
         return div;
     }));
@@ -452,6 +454,16 @@ function secondsUntilIso(value) {
     const ts = Date.parse(value || '');
     if (!Number.isFinite(ts)) return 0;
     return Math.max(0, (ts - Date.now()) / 1000);
+}
+
+// Compares the current quota cycle's pace to past cycles at the same age -
+// the one signal the single-cycle burn rate above can't give: whether this
+// cycle is unusually heavy, not just whether it's on pace to run out.
+function trendText(trend) {
+    if (!trend || !Number.isFinite(trend.delta_pct) || !trend.cycles_compared) return null;
+    const delta = Math.round(trend.delta_pct);
+    const signed = `${delta > 0 ? '+' : ''}${delta}pp`;
+    return fmt(tr('vs_usual_pace', '{delta} vs usual pace ({n} cycles)'), { delta: signed, n: trend.cycles_compared });
 }
 
 function emptyMuted(text) {

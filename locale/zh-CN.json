@@ -90,6 +90,7 @@
     "dash_not_detected": "未检测到",
     "dash_by_time": "{time} 前 {pct}%",
     "dash_by_reset": "重置前 {pct}%",
+    "dash_vs_usual_pace": "较平常节奏 {delta}（{n} 个周期）",
     "dash_ago": "{duration}前",
     "dash_diag_app": "应用",
     "dash_diag_bind": "仪表板绑定",

@@ -14,14 +14,13 @@ import webview  # type: ignore[import-untyped]
 
 from . import __version__
 from .claude_cli import CHANGELOG_URL, find_installations
-from .codex_cli import codex_version
 from .formatting import (
     elapsed_pct, expand_popup_fields, field_period, format_burn_text,
     format_credits, midnight_positions, popup_label, time_until,
 )
 from .i18n import T
-from .kimi_cli import kimi_version
 from .provider_cache import UsageSnapshot
+from .providers import SECONDARY_PROVIDERS_BY_NAME
 from . import settings
 from .settings import (
     BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG,
@@ -34,14 +33,6 @@ if TYPE_CHECKING:
     from .cache import CacheSnapshot
 
 __all__ = ['UsagePopup']
-
-# Heading of the popup's installed-version section, per non-Claude provider.
-_SECONDARY_INSTALL_TITLES = {
-    'codex': ('codex_cli', 'CODEX CLI'),
-    'kimi': ('kimi_cli', 'KIMI CLI'),
-}
-# Reports the installed CLI version of each non-Claude provider.
-_SECONDARY_CLI_VERSIONS = {'codex': codex_version, 'kimi': kimi_version}
 
 _POPUP_DIR = Path(__file__).parent / 'popup'
 _BASELINE_DPI = 96
@@ -162,11 +153,11 @@ def _provider_entries(claude_data: dict[str, Any], secondary: list[tuple[str, di
         'data': claude_data,
     }]
     for provider, data in secondary:
-        key, fallback = _SECONDARY_INSTALL_TITLES[provider]
+        spec = SECONDARY_PROVIDERS_BY_NAME[provider]
         entries.append({
             'id': provider,
             'label': PROVIDER_LABELS[provider],
-            'install_title': T.get(key, fallback),
+            'install_title': T.get(spec.install_title_key, spec.install_title_fallback),
             'data': data,
         })
     return entries
@@ -262,9 +253,9 @@ class UsagePopup:
         self._shown = False
         snap = app.cache.snapshot
         self._last_version = snap.version
-        self._secondary = app._secondary_caches()
+        self._secondary = app.secondary_providers()
         self._last_secondary_versions = {name: cache.snapshot.version for name, cache in self._secondary}
-        self._cli_versions = {name: _SECONDARY_CLI_VERSIONS[name]() for name, _cache in self._secondary}
+        self._cli_versions = {name: SECONDARY_PROVIDERS_BY_NAME[name].cli_version() for name, _cache in self._secondary}
 
         api = _PopupApi(self)
         self._window = webview.create_window(
@@ -290,7 +281,7 @@ class UsagePopup:
         config = _init_config(
             self.app.cache.snapshot,
             secondary=self._secondary_views(),
-            next_poll_time=self.app._next_poll_time,
+            next_poll_time=self.app.next_poll_time,
         )
         self._window.evaluate_js(f'init({json.dumps(config)})')
         self._popup_hwnd = self._window.native.Handle.ToInt32()
@@ -385,7 +376,7 @@ class UsagePopup:
 
     def _update_loop(self) -> None:
         installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
-        last_poll = self.app._next_poll_time
+        last_poll = self.app.next_poll_time
         while self._running:
             time.sleep(self._CHECK_MS / 1000)
             if not self._running:
@@ -393,7 +384,7 @@ class UsagePopup:
             try:
                 snap = self.app.cache.snapshot
                 versions = {name: cache.snapshot.version for name, cache in self._secondary}
-                poll_now = self.app._next_poll_time
+                poll_now = self.app.next_poll_time
                 changed = snap.version != self._last_version or versions != self._last_secondary_versions or poll_now != last_poll
                 if not changed:
                     continue

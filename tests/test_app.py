@@ -95,7 +95,19 @@ class TestInitialization(unittest.TestCase):
              patch('agentpulse.app.KIMI_ENABLED', True):
             app = AgentPulse()
 
-        self.assertEqual([name for name, _cache in app._secondary_caches()], ['codex', 'kimi'])
+        self.assertEqual([name for name, _cache in app.secondary_providers()], ['codex', 'kimi'])
+
+    def test_next_poll_time_property_reflects_private_field(self):
+        """The public next_poll_time property is a read-only view of _next_poll_time."""
+        app = _make_app()
+        try:
+            self.assertIsNone(app.next_poll_time)
+            app._next_poll_time = 1234.5
+            self.assertEqual(app.next_poll_time, 1234.5)
+            with self.assertRaises(AttributeError):
+                app.next_poll_time = 5678.0
+        finally:
+            _cleanup(app)
 
     def test_codex_cache_created_with_token(self):
         """Codex provider is created when Codex monitoring is enabled and a token exists."""
@@ -121,9 +133,9 @@ class TestInitialization(unittest.TestCase):
 
     def test_quiet_hours_wrap_midnight(self):
         """Quiet hours can span midnight."""
-        with patch('agentpulse.app.QUIET_HOURS_ENABLED', True), \
-             patch('agentpulse.app.QUIET_HOURS_START', '22:00'), \
-             patch('agentpulse.app.QUIET_HOURS_END', '08:00'):
+        with patch('agentpulse.settings.QUIET_HOURS_ENABLED', True), \
+             patch('agentpulse.settings.QUIET_HOURS_START', '22:00'), \
+             patch('agentpulse.settings.QUIET_HOURS_END', '08:00'):
             self.assertTrue(_is_quiet_time(datetime(2026, 1, 1, 23, 30)))
             self.assertTrue(_is_quiet_time(datetime(2026, 1, 1, 7, 59)))
             self.assertFalse(_is_quiet_time(datetime(2026, 1, 1, 12, 0)))
@@ -350,8 +362,8 @@ class TestTimeAwareAlerts(unittest.TestCase):
     def setUp(self):
         self.app = _make_app()
         self._cmd_patch = patch('agentpulse.app.run_event_command')
-        self._time_aware_patch = patch('agentpulse.app.ALERT_TIME_AWARE', True)
-        self._below_patch = patch('agentpulse.app.ALERT_TIME_AWARE_BELOW', 100)
+        self._time_aware_patch = patch('agentpulse.settings.ALERT_TIME_AWARE', True)
+        self._below_patch = patch('agentpulse.settings.ALERT_TIME_AWARE_BELOW', 100)
         self._cmd_patch.start()
         self._time_aware_patch.start()
         self._below_patch.start()
@@ -404,7 +416,7 @@ class TestTimeAwareAlerts(unittest.TestCase):
     def test_disabled_when_false(self):
         """With ALERT_TIME_AWARE=False, alerts fire regardless of time."""
         self._time_aware_patch.stop()
-        with patch('agentpulse.app.ALERT_TIME_AWARE', False):
+        with patch('agentpulse.settings.ALERT_TIME_AWARE', False):
             with patch('agentpulse.app.elapsed_pct', return_value=90.0):
                 self.app._check_threshold_alerts({'five_hour': {'utilization': 82, 'resets_at': '2025-01-15T14:30:00+00:00'}})
         self._time_aware_patch.start()
@@ -421,7 +433,7 @@ class TestTimeAwareAlerts(unittest.TestCase):
     def test_threshold_at_or_above_below_cutoff_always_fires(self):
         """Threshold >= alert_time_aware_below fires even when usage <= time."""
         self._below_patch.stop()
-        with patch('agentpulse.app.ALERT_TIME_AWARE_BELOW', 90):
+        with patch('agentpulse.settings.ALERT_TIME_AWARE_BELOW', 90):
             # Thresholds are [80, 95]. Usage crosses 95 which is >= 90 cutoff.
             with patch('agentpulse.app.elapsed_pct', return_value=98.0):
                 self.app._check_threshold_alerts({'five_hour': {'utilization': 97, 'resets_at': '2025-01-15T14:30:00+00:00'}})
@@ -432,7 +444,7 @@ class TestTimeAwareAlerts(unittest.TestCase):
     def test_threshold_below_cutoff_suppressed(self):
         """Threshold < alert_time_aware_below is suppressed when usage <= time."""
         self._below_patch.stop()
-        with patch('agentpulse.app.ALERT_TIME_AWARE_BELOW', 90):
+        with patch('agentpulse.settings.ALERT_TIME_AWARE_BELOW', 90):
             # Thresholds are [80, 95]. Usage crosses 80 which is < 90 cutoff.
             with patch('agentpulse.app.elapsed_pct', return_value=90.0):
                 self.app._check_threshold_alerts({'five_hour': {'utilization': 82, 'resets_at': '2025-01-15T14:30:00+00:00'}})
@@ -443,7 +455,7 @@ class TestTimeAwareAlerts(unittest.TestCase):
     def test_below_cutoff_exact_boundary_fires(self):
         """Threshold exactly at alert_time_aware_below fires regardless of time."""
         self._below_patch.stop()
-        with patch('agentpulse.app.ALERT_TIME_AWARE_BELOW', 80):
+        with patch('agentpulse.settings.ALERT_TIME_AWARE_BELOW', 80):
             with patch('agentpulse.app.elapsed_pct', return_value=90.0):
                 self.app._check_threshold_alerts({'five_hour': {'utilization': 82, 'resets_at': '2025-01-15T14:30:00+00:00'}})
         self._below_patch.start()
@@ -560,7 +572,7 @@ class TestExtraUsageAlerts(unittest.TestCase):
 
     def test_no_time_aware_logic(self):
         """Extra usage alerts are not affected by time-aware settings."""
-        with patch('agentpulse.app.ALERT_TIME_AWARE', True):
+        with patch('agentpulse.settings.ALERT_TIME_AWARE', True):
             self.app._check_extra_usage_alerts(self._extra_data(used=820, limit=1000))
 
         self.app.icon.notify.assert_called_once()
@@ -872,7 +884,7 @@ class TestResetNotifications(unittest.TestCase):
         self.app._flush_deferred_notifications()
         self.app.icon.notify.assert_called_once()
 
-    @patch('agentpulse.app.ALERT_TIME_AWARE', False)
+    @patch('agentpulse.settings.ALERT_TIME_AWARE', False)
     @patch('agentpulse.app.is_workstation_locked', return_value=True)
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1011,7 +1023,7 @@ class TestRenderTray(unittest.TestCase):
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
+    @patch('agentpulse.settings.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_custom_icon_fields_do_not_change_tray_rows(self, mock_icon, _tooltip):
         """Tray rings always show five-hour usage, whatever icon_fields says."""
         self.app._last_response = {
@@ -1024,7 +1036,7 @@ class TestRenderTray(unittest.TestCase):
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.ICON_FIELDS', ['unknown_field', 'five_hour'])
+    @patch('agentpulse.settings.ICON_FIELDS', ['unknown_field', 'five_hour'])
     def test_five_hour_missing_from_response_defaults_to_zero(self, mock_icon, _tooltip):
         """Missing five-hour usage defaults to 0%."""
         self.app._last_response = {'seven_day': {'utilization': 42.0}}
@@ -1034,7 +1046,7 @@ class TestRenderTray(unittest.TestCase):
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
-    @patch('agentpulse.app.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
+    @patch('agentpulse.settings.ICON_FIELDS', ['seven_day_sonnet', 'five_hour'])
     def test_non_five_hour_null_in_response_is_ignored(self, mock_icon, _tooltip):
         """A null quota field is ignored when building the tray rings."""
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day_sonnet': None}
@@ -1488,7 +1500,7 @@ class TestResetCommand(unittest.TestCase):
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1512,7 +1524,7 @@ class TestResetCommand(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_SEVEN_DAY'], '10')
         self.assertEqual(env['USAGE_MONITOR_RESETS_AT'], '2025-01-15T18:00:00Z')
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1532,7 +1544,7 @@ class TestResetCommand(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_FIVE_HOUR'], '50')
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_SEVEN_DAY'], '10')
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1550,7 +1562,7 @@ class TestResetCommand(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_PREV_UTILIZATION'], '30')
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION'], '5')
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1567,7 +1579,7 @@ class TestResetCommand(unittest.TestCase):
         env = mock_cmd.call_args[0][1]
         self.assertEqual(env['USAGE_MONITOR_RESETS_AT'], '')
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', [])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', [])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1582,7 +1594,7 @@ class TestResetCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1597,7 +1609,7 @@ class TestResetCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1614,7 +1626,7 @@ class TestResetCommand(unittest.TestCase):
         variants = {call[0][1]['USAGE_MONITOR_VARIANT'] for call in mock_cmd.call_args_list}
         self.assertEqual(variants, {'five_hour', 'seven_day'})
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1628,7 +1640,7 @@ class TestResetCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1643,7 +1655,7 @@ class TestResetCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.is_workstation_locked', return_value=True)
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
@@ -1674,8 +1686,8 @@ class TestThresholdCommand(unittest.TestCase):
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
-    @patch('agentpulse.app.ALERT_TIME_AWARE', False)
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ALERT_TIME_AWARE', False)
     @patch('agentpulse.app.run_event_command')
     def test_threshold_command_fires_on_crossing(self, mock_cmd):
         """Threshold command fires when usage crosses a configured threshold."""
@@ -1692,7 +1704,7 @@ class TestThresholdCommand(unittest.TestCase):
         self.assertIn('USAGE_MONITOR_TITLE', env)
         self.assertIn('USAGE_MONITOR_MESSAGE', env)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', [])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', [])
     @patch('agentpulse.app.run_event_command')
     def test_no_command_when_setting_empty(self, mock_cmd):
         """No command executed when on_threshold_command is empty."""
@@ -1700,7 +1712,7 @@ class TestThresholdCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_no_command_below_threshold(self, mock_cmd):
         """No command when usage is below all thresholds."""
@@ -1708,7 +1720,7 @@ class TestThresholdCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_no_duplicate_command(self, mock_cmd):
         """No duplicate command for same threshold."""
@@ -1719,7 +1731,7 @@ class TestThresholdCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_command_for_higher_threshold(self, mock_cmd):
         """Command fires again when usage crosses the next higher threshold."""
@@ -1733,9 +1745,9 @@ class TestThresholdCommand(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_THRESHOLD'], '95')
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION'], '97')
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
-    @patch('agentpulse.app.ALERT_TIME_AWARE', True)
-    @patch('agentpulse.app.ALERT_TIME_AWARE_BELOW', 90)
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ALERT_TIME_AWARE', True)
+    @patch('agentpulse.settings.ALERT_TIME_AWARE_BELOW', 90)
     @patch('agentpulse.app.run_event_command')
     def test_time_aware_suppression_suppresses_command(self, mock_cmd):
         """Time-aware suppression also suppresses the command."""
@@ -1744,8 +1756,8 @@ class TestThresholdCommand(unittest.TestCase):
 
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
-    @patch('agentpulse.app.ALERT_TIME_AWARE', False)
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ALERT_TIME_AWARE', False)
     @patch('agentpulse.app.run_event_command')
     def test_no_command_on_first_update(self, mock_cmd):
         """Threshold command is suppressed on first update (notification still fires)."""
@@ -1757,8 +1769,8 @@ class TestThresholdCommand(unittest.TestCase):
         self.app.icon.notify.assert_called_once()
         mock_cmd.assert_not_called()
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
-    @patch('agentpulse.app.ALERT_TIME_AWARE', False)
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ALERT_TIME_AWARE', False)
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.is_workstation_locked', return_value=True)
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
@@ -1789,7 +1801,7 @@ class TestExtraUsageCommand(unittest.TestCase):
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_extra_usage_command_includes_amounts(self, mock_cmd):
         """Extra usage threshold command includes used and limit amounts."""
@@ -1804,7 +1816,7 @@ class TestExtraUsageCommand(unittest.TestCase):
         self.assertIn('USAGE_MONITOR_EXTRA_USED', env)
         self.assertIn('USAGE_MONITOR_EXTRA_LIMIT', env)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', [])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', [])
     @patch('agentpulse.app.run_event_command')
     def test_extra_usage_no_command_when_empty(self, mock_cmd):
         """No command for extra usage when setting is empty."""
@@ -1829,7 +1841,7 @@ class TestTestEventCommands(unittest.TestCase):
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     def test_reset_5h_fires_with_correct_env(self, mock_cmd):
         """Test reset 5h handler passes all required env vars with correct values."""
@@ -1848,7 +1860,7 @@ class TestTestEventCommands(unittest.TestCase):
         self.assertIn('USAGE_MONITOR_TITLE', env)
         self.assertIn('USAGE_MONITOR_MESSAGE', env)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     def test_reset_7d_fires_with_correct_env(self, mock_cmd):
         """Test reset 7d handler passes all required env vars with correct values."""
@@ -1865,7 +1877,7 @@ class TestTestEventCommands(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_SEVEN_DAY'], '0')
         self.assertIn('USAGE_MONITOR_RESETS_AT', env)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_threshold_5h_fires_with_correct_env(self, mock_cmd):
         """Test threshold 5h handler passes all required env vars with correct values."""
@@ -1882,7 +1894,7 @@ class TestTestEventCommands(unittest.TestCase):
         self.assertIn('USAGE_MONITOR_TITLE', env)
         self.assertIn('USAGE_MONITOR_MESSAGE', env)
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_threshold_7d_fires_with_correct_env(self, mock_cmd):
         """Test threshold 7d handler passes all required env vars with correct values."""
@@ -1897,7 +1909,7 @@ class TestTestEventCommands(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_THRESHOLD'], '80')
         self.assertIn('USAGE_MONITOR_RESETS_AT', env)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     def test_reset_5h_resets_at_is_valid_iso_timestamp(self, mock_cmd):
         """USAGE_MONITOR_RESETS_AT is a parseable ISO 8601 timestamp in the future."""
@@ -1907,7 +1919,7 @@ class TestTestEventCommands(unittest.TestCase):
         resets_at = datetime.fromisoformat(env['USAGE_MONITOR_RESETS_AT'])
         self.assertGreater(resets_at, datetime.now(timezone.utc))
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_threshold_5h_resets_at_is_valid_iso_timestamp(self, mock_cmd):
         """USAGE_MONITOR_RESETS_AT is a parseable ISO 8601 timestamp in the future."""
@@ -1917,7 +1929,7 @@ class TestTestEventCommands(unittest.TestCase):
         resets_at = datetime.fromisoformat(env['USAGE_MONITOR_RESETS_AT'])
         self.assertGreater(resets_at, datetime.now(timezone.utc))
 
-    @patch('agentpulse.app.ON_THRESHOLD_COMMAND', ['notify.bat'])
+    @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])
     @patch('agentpulse.app.run_event_command')
     def test_threshold_message_contains_utilization_pct(self, mock_cmd):
         """USAGE_MONITOR_MESSAGE includes the utilization percentage."""
@@ -1940,13 +1952,13 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
         self.app.cache.ensure_profile = MagicMock()
         self.app.cache.last_success_time = 0.0
         # Prevent real HTTP calls from the secondary providers from consuming mocked time.time() values
-        for name, _cache in self.app._secondary_caches():
+        for name, _cache in self.app.secondary_providers():
             setattr(self.app, f'{name}_cache', MagicMock())
 
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
     def test_idle_interrupted_for_imminent_reset(self, mock_time, mock_sleep):
@@ -1977,7 +1989,7 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
 
         self.assertEqual(call_count[0], 2)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', [])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', [])
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
     def test_idle_not_interrupted_without_reset_command(self, mock_time, mock_sleep):
@@ -2003,7 +2015,7 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
 
         self.assertEqual(wait_calls, [None])
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
     def test_idle_no_deadline_when_no_imminent_reset(self, mock_time, mock_sleep):
@@ -2030,7 +2042,7 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
         self.assertEqual(wait_calls, [None])
 
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.POLL_INTERVAL', 180)
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
@@ -2077,7 +2089,7 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
         # _idle_reset_pending was set by the first idle detection
         self.assertTrue(self.app._idle_reset_pending)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.POLL_INTERVAL', 180)
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
@@ -2114,7 +2126,7 @@ class TestPollLoopIdleInterruption(unittest.TestCase):
         # reset is confirmed, idle polling resumes correctly.
         self.assertTrue(self.app._idle_reset_pending)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.POLL_INTERVAL', 180)
     @patch('agentpulse.app.time.sleep')
     @patch('agentpulse.app.time.time')
@@ -2170,7 +2182,7 @@ class TestIdleResetPendingCleared(unittest.TestCase):
     def tearDown(self):
         _cleanup(self.app)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -2186,7 +2198,7 @@ class TestIdleResetPendingCleared(unittest.TestCase):
 
         self.assertFalse(self.app._idle_reset_pending)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -2202,7 +2214,7 @@ class TestIdleResetPendingCleared(unittest.TestCase):
 
         self.assertFalse(self.app._idle_reset_pending)
 
-    @patch('agentpulse.app.ON_RESET_COMMAND', ['echo reset'])
+    @patch('agentpulse.settings.ON_RESET_COMMAND', ['echo reset'])
     @patch('agentpulse.app.run_event_command')
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')

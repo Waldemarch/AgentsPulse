@@ -90,6 +90,7 @@
     "dash_not_detected": "not detected",
     "dash_by_time": "{pct}% by {time}",
     "dash_by_reset": "{pct}% by reset",
+    "dash_vs_usual_pace": "{delta} vs usual pace ({n} cycles)",
     "dash_ago": "{duration} ago",
     "dash_diag_app": "App",
     "dash_diag_bind": "Dashboard bind",

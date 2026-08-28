@@ -53,14 +53,21 @@ _FALLBACK_USER_AGENT = 'codex-cli/0.124.0'
 
 
 def read_access_token() -> str | None:
-    """Read the current access token from the Codex auth file."""
-    if not CODEX_AUTH_FILE.exists():
-        return None
+    """Read the current access token from the Codex auth file.
+
+    Returns None when the file is missing, unreadable, or shaped
+    differently than expected (e.g. ``tokens`` is ``null`` or the document
+    root is not an object) rather than raising.
+    """
     try:
         auth = json.loads(CODEX_AUTH_FILE.read_text(encoding='utf-8'))
-        return auth.get('tokens', {}).get('access_token') or None
-    except (json.JSONDecodeError, KeyError):
+    except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(auth, dict):
+        return None
+    tokens = auth.get('tokens')
+    token = tokens.get('access_token') if isinstance(tokens, dict) else None
+    return token if isinstance(token, str) and token else None
 
 
 def api_headers() -> dict[str, str] | None:

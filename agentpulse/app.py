@@ -29,19 +29,13 @@ from .kimi_cache import KimiCache
 from .popup import UsagePopup
 from . import settings as _settings
 from .settings import (
-    ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW, CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
+    CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
     KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
     get_alert_thresholds,
 )
 from .tray_icon import create_icon_image, create_status_image, taskbar_uses_light_theme, watch_theme_change
 
 __all__ = ['AgentPulse', 'UsageMonitorForClaude', 'crash_log']
-
-# Tooltip headings for the providers rendered below the Claude section.
-_SECONDARY_TOOLTIP_TITLES = {
-    'codex': ('tooltip_title_codex', 'Codex Usage'),
-    'kimi': ('tooltip_title_kimi', 'Kimi Usage'),
-}
 
 
 def _future_iso(**delta: float) -> str:
@@ -51,6 +45,32 @@ def _future_iso(**delta: float) -> str:
 def _minutes_from_hhmm(value: str) -> int:
     hour, minute = value.split(':', 1)
     return int(hour) * 60 + int(minute)
+
+
+def _dual_prefixed_env(values: dict[str, str]) -> dict[str, str]:
+    """Build event-command env vars under both supported prefixes.
+
+    ``AGENTPULSE_*`` is the current prefix; ``USAGE_MONITOR_*`` remains for
+    backwards compatibility (see docs/event-commands.md).  Every value is
+    set identically under both prefixes here so a call site can't let one
+    drift out of sync with the other, as the hand-written dicts used to.
+    """
+    env: dict[str, str] = {}
+    for key, value in values.items():
+        env[f'AGENTPULSE_{key}'] = value
+        env[f'USAGE_MONITOR_{key}'] = value
+    return env
+
+
+def _event_env(shared: dict[str, str], *, provider: str) -> dict[str, str]:
+    """Build one event's full env: dual-prefixed `shared` vars plus the provider.
+
+    The provider is AGENTPULSE_-only - ``USAGE_MONITOR_*`` predates
+    multi-provider support and has no equivalent field.
+    """
+    env = _dual_prefixed_env(shared)
+    env['AGENTPULSE_PROVIDER'] = provider
+    return env
 
 
 def _is_quiet_time(now: datetime | None = None) -> bool:
@@ -157,56 +177,66 @@ class AgentPulse:
         self.icon.stop()
 
     def _test_env(self, event: str, variant: str, pct: str, threshold: str = '', prev: str = '', resets_at: str = '') -> dict[str, str]:
-        env = {
-            'USAGE_MONITOR_EVENT': event,
-            'USAGE_MONITOR_VARIANT': variant,
-            'USAGE_MONITOR_UTILIZATION': pct,
-            'USAGE_MONITOR_RESETS_AT': resets_at,
+        values = {
+            'EVENT': event,
+            'VARIANT': variant,
+            'UTILIZATION': pct,
+            'RESETS_AT': resets_at,
         }
         if threshold:
-            env['USAGE_MONITOR_THRESHOLD'] = threshold
+            values['THRESHOLD'] = threshold
         if prev:
-            env['USAGE_MONITOR_PREV_UTILIZATION'] = prev
-        env.setdefault('USAGE_MONITOR_UTILIZATION_FIVE_HOUR', '0' if variant == 'five_hour' else '12')
-        env.setdefault('USAGE_MONITOR_UTILIZATION_SEVEN_DAY', '0' if variant == 'seven_day' else '45')
-        return env
+            values['PREV_UTILIZATION'] = prev
+        values.setdefault('UTILIZATION_FIVE_HOUR', '0' if variant == 'five_hour' else '12')
+        values.setdefault('UTILIZATION_SEVEN_DAY', '0' if variant == 'seven_day' else '45')
+        return _event_env(values, provider='claude')
 
     def on_test_reset_5h(self, icon: Any = None, item: Any = None) -> None:
         env = self._test_env('reset', 'five_hour', '0', prev='95', resets_at=_future_iso(hours=5))
-        env.update({'USAGE_MONITOR_TITLE': T['notify_reset_title'], 'USAGE_MONITOR_MESSAGE': T['notify_reset']})
+        env.update(_dual_prefixed_env({'TITLE': T['notify_reset_title'], 'MESSAGE': T['notify_reset']}))
         run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def on_test_reset_7d(self, icon: Any = None, item: Any = None) -> None:
         env = self._test_env('reset', 'seven_day', '0', prev='99', resets_at=_future_iso(days=7))
-        env.update({'USAGE_MONITOR_TITLE': T['notify_reset_title'], 'USAGE_MONITOR_MESSAGE': T['notify_reset']})
+        env.update(_dual_prefixed_env({'TITLE': T['notify_reset_title'], 'MESSAGE': T['notify_reset']}))
         run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def on_test_threshold_5h(self, icon: Any = None, item: Any = None) -> None:
         message = T['notify_threshold_generic'].format(label=popup_label('five_hour'), pct='82')
         env = self._test_env('threshold', 'five_hour', '82', threshold='80', resets_at=_future_iso(hours=3))
-        env.update({'USAGE_MONITOR_TITLE': T['notify_threshold_title'], 'USAGE_MONITOR_MESSAGE': message})
+        env.update(_dual_prefixed_env({'TITLE': T['notify_threshold_title'], 'MESSAGE': message}))
         run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
     def on_test_threshold_7d(self, icon: Any = None, item: Any = None) -> None:
         message = T['notify_threshold_generic'].format(label=popup_label('seven_day'), pct='81')
         env = self._test_env('threshold', 'seven_day', '81', threshold='80', resets_at=_future_iso(days=4))
-        env.update({'USAGE_MONITOR_TITLE': T['notify_threshold_title'], 'USAGE_MONITOR_MESSAGE': message})
+        env.update(_dual_prefixed_env({'TITLE': T['notify_threshold_title'], 'MESSAGE': message}))
         run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
-    def _secondary_caches(self) -> list[tuple[str, Any]]:
-        """Return the active non-Claude provider caches in display order."""
+    def secondary_providers(self) -> list[tuple[str, Any]]:
+        """Return the active non-Claude provider caches, in display order.
+
+        Public: the dashboard and popup view layers use this (and
+        :attr:`next_poll_time`) to read provider state instead of reaching
+        into private attributes.
+        """
         caches = [('codex', self.codex_cache), ('kimi', self.kimi_cache)]
         return [(name, cache) for name, cache in caches if cache is not None]
+
+    @property
+    def next_poll_time(self) -> float | None:
+        """Unix timestamp of the next scheduled poll, or None before the first one."""
+        return self._next_poll_time
 
     def _open_popup(self) -> None:
         try:
             refresh_claude = self.cache.last_success_time is None or time.time() - self.cache.last_success_time >= POLL_FAST
             needs_claude_profile = not self.cache.profile
             stale = {
-                name for name, cache in self._secondary_caches()
+                name for name, cache in self.secondary_providers()
                 if cache.last_success_time is None or time.time() - cache.last_success_time >= POLL_FAST
             }
-            missing_profiles = {name for name, cache in self._secondary_caches() if not cache.profile}
+            missing_profiles = {name for name, cache in self.secondary_providers() if not cache.profile}
             if refresh_claude or needs_claude_profile or stale or missing_profiles:
                 threading.Thread(
                     target=self._popup_refresh,
@@ -223,7 +253,7 @@ class AgentPulse:
             self.cache.ensure_profile()
         if refresh_claude:
             self.update()
-        for name, cache in self._secondary_caches():
+        for name, cache in self.secondary_providers():
             if name in missing_profiles:
                 cache.ensure_profile()
             if name in stale:
@@ -234,20 +264,18 @@ class AgentPulse:
         return entry if isinstance(entry, dict) else {}
 
     def _secondary_tooltip_sections(self) -> list[tuple[str, dict[str, Any]]]:
-        """Return ``(heading, usage_data)`` pairs for the non-Claude providers."""
+        """Return ``(provider_name, usage_data)`` pairs for the non-Claude providers."""
         sections = []
-        for name, _cache in self._secondary_caches():
+        for name, _cache in self.secondary_providers():
             data = self._secondary_responses.get(name)
-            if not data:
-                continue
-            key, fallback = _SECONDARY_TOOLTIP_TITLES[name]
-            sections.append((T.get(key, fallback), data))
+            if data:
+                sections.append((name, data))
         return sections
 
     def _render_tray(self) -> None:
         data = self._last_response
         sections = self._secondary_tooltip_sections()
-        available = [entry for _heading, entry in sections if 'error' not in entry]
+        available = [entry for _name, entry in sections if 'error' not in entry]
         if 'error' in data and not available:
             self.icon.icon = create_status_image('C!' if data.get('auth_error') else '!', self._light_taskbar)
             self.icon.title = format_tooltip(data, sections)
@@ -271,7 +299,7 @@ class AgentPulse:
 
     def update(self) -> None:
         result = self.cache.update()
-        for name, cache in self._secondary_caches():
+        for name, cache in self.secondary_providers():
             self._update_secondary(name, cache)
         if result.data is None:
             return
@@ -376,7 +404,7 @@ class AgentPulse:
             highest = max((threshold for threshold in thresholds if pct >= threshold), default=0)
             state_key = self._threshold_state_key(provider, variant)
             last = self._notified_thresholds.get(state_key, 0)
-            if ALERT_TIME_AWARE and highest > last and highest < ALERT_TIME_AWARE_BELOW:
+            if _settings.ALERT_TIME_AWARE and highest > last and highest < _settings.ALERT_TIME_AWARE_BELOW:
                 period = field_period(variant)
                 time_pct = elapsed_pct(entry.get('resets_at'), period) if period else None
                 if time_pct is not None and pct <= time_pct:
@@ -430,27 +458,17 @@ class AgentPulse:
             return
         five = (data.get('five_hour') or {}).get('utilization', 0) or 0
         seven = (data.get('seven_day') or {}).get('utilization', 0) or 0
-        env = {
-            'AGENTPULSE_EVENT': 'reset',
-            'AGENTPULSE_PROVIDER': provider,
-            'AGENTPULSE_VARIANT': variant,
-            'AGENTPULSE_UTILIZATION': str(round(pct)),
-            'AGENTPULSE_PREV_UTILIZATION': str(round(prev_pct)),
-            'AGENTPULSE_UTILIZATION_FIVE_HOUR': str(round(five)),
-            'AGENTPULSE_UTILIZATION_SEVEN_DAY': str(round(seven)),
-            'AGENTPULSE_RESETS_AT': entry.get('resets_at', ''),
-            'AGENTPULSE_TITLE': T['notify_reset_title'],
-            'AGENTPULSE_MESSAGE': T['notify_reset'],
-            'USAGE_MONITOR_EVENT': 'reset',
-            'USAGE_MONITOR_VARIANT': variant,
-            'USAGE_MONITOR_UTILIZATION': str(round(pct)),
-            'USAGE_MONITOR_PREV_UTILIZATION': str(round(prev_pct)),
-            'USAGE_MONITOR_UTILIZATION_FIVE_HOUR': str(round(five)),
-            'USAGE_MONITOR_UTILIZATION_SEVEN_DAY': str(round(seven)),
-            'USAGE_MONITOR_RESETS_AT': entry.get('resets_at', ''),
-            'USAGE_MONITOR_TITLE': T['notify_reset_title'],
-            'USAGE_MONITOR_MESSAGE': T['notify_reset'],
-        }
+        env = _event_env({
+            'EVENT': 'reset',
+            'VARIANT': variant,
+            'UTILIZATION': str(round(pct)),
+            'PREV_UTILIZATION': str(round(prev_pct)),
+            'UTILIZATION_FIVE_HOUR': str(round(five)),
+            'UTILIZATION_SEVEN_DAY': str(round(seven)),
+            'RESETS_AT': entry.get('resets_at', ''),
+            'TITLE': T['notify_reset_title'],
+            'MESSAGE': T['notify_reset'],
+        }, provider=provider)
         run_event_command(_settings.ON_RESET_COMMAND, env)
 
     def _run_threshold_command(
@@ -468,27 +486,20 @@ class AgentPulse:
     ) -> None:
         if not _settings.ON_THRESHOLD_COMMAND or not self._first_update_done:
             return
-        env = {
-            'AGENTPULSE_EVENT': 'threshold',
-            'AGENTPULSE_PROVIDER': provider,
-            'AGENTPULSE_VARIANT': variant,
-            'AGENTPULSE_UTILIZATION': str(round(pct)),
-            'AGENTPULSE_THRESHOLD': str(round(threshold)),
-            'AGENTPULSE_RESETS_AT': entry.get('resets_at', ''),
-            'AGENTPULSE_TITLE': title,
-            'AGENTPULSE_MESSAGE': message,
-            'USAGE_MONITOR_EVENT': 'threshold',
-            'USAGE_MONITOR_VARIANT': variant,
-            'USAGE_MONITOR_UTILIZATION': str(round(pct)),
-            'USAGE_MONITOR_THRESHOLD': str(round(threshold)),
-            'USAGE_MONITOR_RESETS_AT': entry.get('resets_at', ''),
-            'USAGE_MONITOR_TITLE': title,
-            'USAGE_MONITOR_MESSAGE': message,
+        shared = {
+            'EVENT': 'threshold',
+            'VARIANT': variant,
+            'UTILIZATION': str(round(pct)),
+            'THRESHOLD': str(round(threshold)),
+            'RESETS_AT': entry.get('resets_at', ''),
+            'TITLE': title,
+            'MESSAGE': message,
         }
         if extra_used:
-            env.update({'AGENTPULSE_EXTRA_USED': extra_used, 'USAGE_MONITOR_EXTRA_USED': extra_used})
+            shared['EXTRA_USED'] = extra_used
         if extra_limit:
-            env.update({'AGENTPULSE_EXTRA_LIMIT': extra_limit, 'USAGE_MONITOR_EXTRA_LIMIT': extra_limit})
+            shared['EXTRA_LIMIT'] = extra_limit
+        env = _event_env(shared, provider=provider)
         run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
 
     def _seconds_until_next_reset(self) -> float | None:
@@ -534,7 +545,7 @@ class AgentPulse:
 
     def poll_loop(self) -> None:
         self.cache.ensure_profile()
-        for _name, cache in self._secondary_caches():
+        for _name, cache in self.secondary_providers():
             cache.ensure_profile()
         while self.running:
             self.update()

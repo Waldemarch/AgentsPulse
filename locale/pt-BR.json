@@ -90,6 +90,7 @@
     "dash_not_detected": "não detectado",
     "dash_by_time": "{pct}% até {time}",
     "dash_by_reset": "{pct}% até a redefinição",
+    "dash_vs_usual_pace": "{delta} em relação ao ritmo habitual ({n} ciclos)",
     "dash_ago": "há {duration}",
     "dash_diag_app": "App",
     "dash_diag_bind": "Vínculo do painel",

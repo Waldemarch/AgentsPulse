@@ -309,6 +309,14 @@ canvas {
 .prediction.ok strong { color: var(--ok); }
 .prediction.warn strong { color: var(--danger); }
 
+.prediction .trend {
+    margin-top: 2px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
 .heatmap {
     display: grid;
     grid-template-columns: 72px repeat(24, minmax(18px, 1fr));

@@ -90,6 +90,7 @@
     "dash_not_detected": "감지되지 않음",
     "dash_by_time": "{time}까지 {pct}%",
     "dash_by_reset": "재설정까지 {pct}%",
+    "dash_vs_usual_pace": "평소 속도 대비 {delta} ({n}회 주기)",
     "dash_ago": "{duration} 전",
     "dash_diag_app": "앱",
     "dash_diag_bind": "대시보드 바인드",
