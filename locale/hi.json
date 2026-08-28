@@ -90,6 +90,7 @@
     "dash_not_detected": "पता नहीं चला",
     "dash_by_time": "{time} तक {pct}%",
     "dash_by_reset": "रीसेट तक {pct}%",
+    "dash_vs_usual_pace": "सामान्य गति की तुलना में {delta} ({n} चक्र)",
     "dash_ago": "{duration} पहले",
     "dash_diag_app": "ऐप",
     "dash_diag_bind": "डैशबोर्ड बाइंड",

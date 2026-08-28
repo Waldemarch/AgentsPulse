@@ -1,18 +1,27 @@
 """Discovery and maintenance helpers for Claude Code installations."""
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 CLAUDE_CLI_PATH = Path.home() / '.local' / 'bin' / 'claude.exe'
+# Install locations to try, in order.  The native installer places the CLI
+# under the home directory above; a node/npm install
+# (`npm install -g @anthropic-ai/claude-code`) puts it here instead.
+CLAUDE_CLI_PATHS = (
+    CLAUDE_CLI_PATH,
+    Path(os.environ.get('APPDATA', '')) / 'npm' / 'claude.cmd',
+)
 CHANGELOG_URL = 'https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md'
 PROJECT_URL = 'https://github.com/Waldemarch/AgentsPulse'
 
 __all__ = [
-    'CHANGELOG_URL', 'CLAUDE_CLI_PATH', 'PROJECT_URL',
-    'ClaudeInstallation', 'RefreshResult', 'cli_version',
+    'CHANGELOG_URL', 'CLAUDE_CLI_PATH', 'CLAUDE_CLI_PATHS', 'PROJECT_URL',
+    'ClaudeInstallation', 'RefreshResult', 'claude_cli_path', 'cli_version',
     'find_installations', 'refresh_token',
 ]
 
@@ -77,6 +86,23 @@ def cli_version(path: Path) -> str:
     return version
 
 
+def claude_cli_path() -> Path | None:
+    """Return the first installed Claude Code CLI, or None when none is present.
+
+    Tries the known install locations first, then falls back to a PATH
+    lookup so installers that place the CLI somewhere else - but add it to
+    PATH, as every documented install method does - are still found.
+    """
+    for path in CLAUDE_CLI_PATHS:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    found = shutil.which('claude')
+    return Path(found) if found else None
+
+
 def _best_extension(root: Path) -> tuple[str, Path] | None:
     if not root.is_dir():
         return None
@@ -97,10 +123,11 @@ def _best_extension(root: Path) -> tuple[str, Path] | None:
 def find_installations() -> list[ClaudeInstallation]:
     """Return known Claude Code CLI and IDE extension installations."""
     found: list[ClaudeInstallation] = []
-    if CLAUDE_CLI_PATH.is_file():
-        version = cli_version(CLAUDE_CLI_PATH)
+    cli_path = claude_cli_path()
+    if cli_path is not None:
+        version = cli_version(cli_path)
         if version:
-            found.append(ClaudeInstallation('CLI', version, CLAUDE_CLI_PATH))
+            found.append(ClaudeInstallation('CLI', version, cli_path))
 
     for label, root in _EXTENSION_DIRS:
         best = _best_extension(root)
@@ -112,10 +139,11 @@ def find_installations() -> list[ClaudeInstallation]:
 
 def refresh_token() -> RefreshResult:
     """Run `claude update` and summarize the result."""
-    if not CLAUDE_CLI_PATH.is_file():
+    cli_path = claude_cli_path()
+    if cli_path is None:
         return RefreshResult(False, False, '', '', 'CLI not found')
     try:
-        proc = _run_hidden([str(CLAUDE_CLI_PATH), 'update'], timeout=60)
+        proc = _run_hidden([str(cli_path), 'update'], timeout=60)
     except subprocess.TimeoutExpired:
         return RefreshResult(False, False, '', '', 'Timeout')
     except OSError as exc:

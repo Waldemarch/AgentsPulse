@@ -90,6 +90,7 @@
     "dash_not_detected": "nicht erkannt",
     "dash_by_time": "{pct}% bis {time}",
     "dash_by_reset": "{pct}% bis zum Reset",
+    "dash_vs_usual_pace": "{delta} gegenüber dem üblichen Tempo ({n} Zyklen)",
     "dash_ago": "vor {duration}",
     "dash_diag_app": "App",
     "dash_diag_bind": "Dashboard-Bindung",

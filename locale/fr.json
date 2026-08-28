@@ -90,6 +90,7 @@
     "dash_not_detected": "non détecté",
     "dash_by_time": "{pct}% d'ici {time}",
     "dash_by_reset": "{pct}% à la réinitialisation",
+    "dash_vs_usual_pace": "{delta} par rapport au rythme habituel ({n} cycles)",
     "dash_ago": "il y a {duration}",
     "dash_diag_app": "Application",
     "dash_diag_bind": "Liaison du tableau de bord",

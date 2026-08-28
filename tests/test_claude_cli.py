@@ -2,7 +2,7 @@
 Claude CLI Tests
 ==================
 
-Unit tests for find_installations(), refresh_token(), and cli_version().
+Unit tests for claude_cli_path(), find_installations(), refresh_token(), and cli_version().
 """
 from __future__ import annotations
 
@@ -16,10 +16,31 @@ from agentpulse import claude_cli
 from agentpulse.claude_cli import (
     ClaudeInstallation,
     RefreshResult,
+    claude_cli_path,
     cli_version,
     find_installations,
     refresh_token,
 )
+
+
+class _CliPathTestCase(unittest.TestCase):
+    """Shared setup: a single mocked CLI candidate and no PATH fallback match.
+
+    ``find_installations()`` and ``refresh_token()`` resolve the CLI through
+    ``claude_cli_path()``, which walks ``CLAUDE_CLI_PATHS`` and then falls
+    back to a PATH lookup.  Patching the candidate tuple to one mock keeps
+    the existing single-path test bodies unchanged; patching ``shutil.which``
+    to ``None`` keeps the PATH fallback from interfering.
+    """
+
+    def setUp(self):
+        self.mock_cli_path = MagicMock()
+        path_patcher = patch('agentpulse.claude_cli.CLAUDE_CLI_PATHS', (self.mock_cli_path,))
+        path_patcher.start()
+        self.addCleanup(path_patcher.stop)
+        which_patcher = patch('agentpulse.claude_cli.shutil.which', return_value=None)
+        which_patcher.start()
+        self.addCleanup(which_patcher.stop)
 
 
 # ---------------------------------------------------------------------------
@@ -115,46 +136,99 @@ class TestCliVersion(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# claude_cli_path
+# ---------------------------------------------------------------------------
+
+class TestClaudeCliPath(unittest.TestCase):
+    """Tests for claude_cli_path() candidate resolution."""
+
+    def setUp(self):
+        self.home_bin = MagicMock(name='home_bin')
+        self.npm_shim = MagicMock(name='npm_shim')
+        patcher = patch('agentpulse.claude_cli.CLAUDE_CLI_PATHS', (self.home_bin, self.npm_shim))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_prefers_home_binary(self):
+        self.home_bin.is_file.return_value = True
+        self.npm_shim.is_file.return_value = True
+        self.assertIs(claude_cli_path(), self.home_bin)
+
+    def test_falls_back_to_npm_install(self):
+        self.home_bin.is_file.return_value = False
+        self.npm_shim.is_file.return_value = True
+        self.assertIs(claude_cli_path(), self.npm_shim)
+
+    def test_unreadable_candidate_does_not_stop_the_search(self):
+        self.home_bin.is_file.side_effect = OSError('permission denied')
+        self.npm_shim.is_file.return_value = True
+        self.assertIs(claude_cli_path(), self.npm_shim)
+
+    @patch('agentpulse.claude_cli.shutil.which', return_value=None)
+    def test_none_when_nothing_installed(self, _mock_which):
+        self.home_bin.is_file.return_value = False
+        self.npm_shim.is_file.return_value = False
+        self.assertIsNone(claude_cli_path())
+
+    @patch('agentpulse.claude_cli.shutil.which', return_value='/usr/bin/claude')
+    def test_falls_back_to_path_lookup(self, _mock_which):
+        """A CLI added to PATH by an installer that uses neither known location is still found."""
+        self.home_bin.is_file.return_value = False
+        self.npm_shim.is_file.return_value = False
+        self.assertEqual(claude_cli_path(), Path('/usr/bin/claude'))
+
+
+class TestDefaultCliCandidates(unittest.TestCase):
+    """Tests for the shipped CLAUDE_CLI_PATHS candidate list (not patched)."""
+
+    def test_home_binary_is_tried_first(self):
+        first = claude_cli.CLAUDE_CLI_PATHS[0]
+        self.assertEqual(first.name, 'claude.exe')
+        self.assertIs(first, claude_cli.CLAUDE_CLI_PATH)
+
+    def test_npm_install_is_the_fallback(self):
+        last = claude_cli.CLAUDE_CLI_PATHS[-1]
+        self.assertEqual(last.name, 'claude.cmd')
+        self.assertEqual(last.parent.name, 'npm')
+
+
+# ---------------------------------------------------------------------------
 # find_installations
 # ---------------------------------------------------------------------------
 
-class TestFindInstallations(unittest.TestCase):
+class TestFindInstallations(_CliPathTestCase):
     """Tests for find_installations()."""
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
     @patch('agentpulse.claude_cli._EXTENSION_DIRS', [])
-    def test_no_installations_found(self, mock_cli_path, _mock_version):
+    def test_no_installations_found(self, _mock_version):
         """Returns empty list when nothing is installed."""
-        mock_cli_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         result = find_installations()
         self.assertEqual(result, [])
 
     @patch('agentpulse.claude_cli.cli_version', return_value='2.1.69')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
     @patch('agentpulse.claude_cli._EXTENSION_DIRS', [])
-    def test_cli_only(self, mock_cli_path, _mock_version):
+    def test_cli_only(self, _mock_version):
         """Returns CLI installation when binary exists."""
-        mock_cli_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         result = find_installations()
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].name, 'CLI')
         self.assertEqual(result[0].version, '2.1.69')
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
     @patch('agentpulse.claude_cli._EXTENSION_DIRS', [])
-    def test_cli_exists_but_version_fails(self, mock_cli_path, _mock_version):
+    def test_cli_exists_but_version_fails(self, _mock_version):
         """CLI binary exists but version command fails - not included."""
-        mock_cli_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         result = find_installations()
         self.assertEqual(result, [])
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_vscode_extension(self, mock_cli_path, _mock_version):
+    def test_vscode_extension(self, _mock_version):
         """Finds VS Code extension and extracts version from directory name."""
-        mock_cli_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         with TemporaryDirectory() as tmp:
             ext_dir = Path(tmp)
             (ext_dir / 'anthropic.claude-code-2.1.69-win32-x64').mkdir()
@@ -165,10 +239,9 @@ class TestFindInstallations(unittest.TestCase):
         self.assertEqual(result[0].version, '2.1.69')
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_picks_highest_version(self, mock_cli_path, _mock_version):
+    def test_picks_highest_version(self, _mock_version):
         """When multiple extension versions exist, picks the highest."""
-        mock_cli_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         with TemporaryDirectory() as tmp:
             ext_dir = Path(tmp)
             (ext_dir / 'anthropic.claude-code-2.1.63-win32-x64').mkdir()
@@ -180,10 +253,9 @@ class TestFindInstallations(unittest.TestCase):
         self.assertEqual(result[0].version, '2.1.69')
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_ignores_non_claude_extensions(self, mock_cli_path, _mock_version):
+    def test_ignores_non_claude_extensions(self, _mock_version):
         """Ignores directories that don't match the Claude extension prefix."""
-        mock_cli_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         with TemporaryDirectory() as tmp:
             ext_dir = Path(tmp)
             (ext_dir / 'some-other-extension-1.0.0').mkdir()
@@ -194,19 +266,17 @@ class TestFindInstallations(unittest.TestCase):
         self.assertEqual(result[0].version, '2.1.69')
 
     @patch('agentpulse.claude_cli.cli_version', return_value='')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_nonexistent_extension_dir_skipped(self, mock_cli_path, _mock_version):
+    def test_nonexistent_extension_dir_skipped(self, _mock_version):
         """Extension directories that don't exist are silently skipped."""
-        mock_cli_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         with patch('agentpulse.claude_cli._EXTENSION_DIRS', [('VS Code', Path('/nonexistent'))]):
             result = find_installations()
         self.assertEqual(result, [])
 
     @patch('agentpulse.claude_cli.cli_version', return_value='2.1.69')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_cli_and_extensions_combined(self, mock_cli_path, _mock_version):
+    def test_cli_and_extensions_combined(self, _mock_version):
         """Returns both CLI and extension installations."""
-        mock_cli_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         with TemporaryDirectory() as tmp:
             ext_dir = Path(tmp)
             (ext_dir / 'anthropic.claude-code-2.1.68-win32-x64').mkdir()
@@ -221,22 +291,20 @@ class TestFindInstallations(unittest.TestCase):
 # refresh_token
 # ---------------------------------------------------------------------------
 
-class TestRefreshToken(unittest.TestCase):
+class TestRefreshToken(_CliPathTestCase):
     """Tests for refresh_token()."""
 
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_cli_not_found(self, mock_path):
+    def test_cli_not_found(self):
         """Returns error when CLI binary doesn't exist."""
-        mock_path.is_file.return_value = False
+        self.mock_cli_path.is_file.return_value = False
         result = refresh_token()
         self.assertFalse(result.success)
         self.assertEqual(result.error, 'CLI not found')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_up_to_date(self, mock_path, mock_run):
+    def test_up_to_date(self, mock_run):
         """Parses 'up to date' output correctly."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(
             stdout='Current version: 2.1.69\nChecking for updates to latest version...\nClaude Code is up to date (2.1.69)\n',
             stderr='', returncode=0,
@@ -248,10 +316,9 @@ class TestRefreshToken(unittest.TestCase):
         self.assertEqual(result.new_version, '2.1.69')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_successfully_updated(self, mock_path, mock_run):
+    def test_successfully_updated(self, mock_run):
         """Parses 'Successfully updated' output correctly."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(
             stdout='Current version: 2.1.38\nChecking for updates to latest version...\nSuccessfully updated from 2.1.38 to version 2.1.69\n',
             stderr='', returncode=0,
@@ -263,59 +330,53 @@ class TestRefreshToken(unittest.TestCase):
         self.assertEqual(result.new_version, '2.1.69')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_timeout(self, mock_path, mock_run):
+    def test_timeout(self, mock_run):
         """Returns error on timeout."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.side_effect = subprocess.TimeoutExpired(cmd='claude', timeout=60)
         result = refresh_token()
         self.assertFalse(result.success)
         self.assertEqual(result.error, 'Timeout')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_os_error(self, mock_path, mock_run):
+    def test_os_error(self, mock_run):
         """Returns error on OSError."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.side_effect = OSError('Permission denied')
         result = refresh_token()
         self.assertFalse(result.success)
         self.assertEqual(result.error, 'Permission denied')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_unexpected_output_success(self, mock_path, mock_run):
+    def test_unexpected_output_success(self, mock_run):
         """Unexpected output with returncode 0 still counts as success."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(stdout='Something unexpected', stderr='', returncode=0)
         result = refresh_token()
         self.assertTrue(result.success)
         self.assertFalse(result.updated)
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_unexpected_output_failure(self, mock_path, mock_run):
+    def test_unexpected_output_failure(self, mock_run):
         """Unexpected output with non-zero returncode is a failure."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(stdout='Error: something', stderr='', returncode=1)
         result = refresh_token()
         self.assertFalse(result.success)
         self.assertIn('Error: something', result.error)
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_error_message_truncated(self, mock_path, mock_run):
+    def test_error_message_truncated(self, mock_run):
         """Long error output is truncated to 200 characters."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(stdout='X' * 300, stderr='', returncode=1)
         result = refresh_token()
         self.assertEqual(len(result.error), 200)
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_update_without_version_prefix(self, mock_path, mock_run):
+    def test_update_without_version_prefix(self, mock_run):
         """Parses update output without 'version' prefix before new version."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(
             stdout='updated from 2.1.38 to 2.1.69', stderr='', returncode=0,
         )
@@ -325,10 +386,9 @@ class TestRefreshToken(unittest.TestCase):
         self.assertEqual(result.new_version, '2.1.69')
 
     @patch('agentpulse.claude_cli.subprocess.run')
-    @patch('agentpulse.claude_cli.CLAUDE_CLI_PATH')
-    def test_stderr_included_in_parsing(self, mock_path, mock_run):
+    def test_stderr_included_in_parsing(self, mock_run):
         """Output from stderr is also considered when parsing."""
-        mock_path.is_file.return_value = True
+        self.mock_cli_path.is_file.return_value = True
         mock_run.return_value = MagicMock(
             stdout='', stderr='Claude Code is up to date (2.1.69)', returncode=0,
         )

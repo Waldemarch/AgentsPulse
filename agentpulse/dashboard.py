@@ -26,10 +26,9 @@ from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .claude_cli import find_installations
-from .codex_cli import codex_version
 from .formatting import field_period, popup_label, time_until
 from .i18n import T
-from .kimi_cli import kimi_version
+from .providers import SECONDARY_PROVIDERS_BY_NAME
 from .settings import (
     DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST, PROVIDER_LABELS,
     dashboard_settings, history_write_path, save_dashboard_settings,
@@ -48,8 +47,6 @@ _MAX_AGE_SECONDS = 30 * 24 * 3600
 _MAX_SAMPLES = 60000
 # Stale history-file lines tolerated before the file is compacted (rewritten from memory).
 _HISTORY_COMPACT_SLACK = 4000
-# Reports the installed CLI version of each non-Claude provider.
-_SECONDARY_CLI_VERSIONS = {'codex': codex_version, 'kimi': kimi_version}
 _RANGES = {
     '24h': 24 * 3600,
     '7d': 7 * 24 * 3600,
@@ -515,7 +512,7 @@ def _dashboard_i18n() -> dict[str, str]:
         'usage_history', 'burn_rate', 'predictions', 'heatmap', 'diagnostics', 'settings',
         'diag_sub', 'restart_required', 'pp_per_hour', 'heatmap_meta', 'day_target', 'rows',
         'waiting', 'waiting_usage', 'waiting_enough', 'waiting_history', 'no_reset', 'not_detected',
-        'by_time', 'by_reset', 'ago',
+        'by_time', 'by_reset', 'vs_usual_pace', 'ago',
         'diag_app', 'diag_bind', 'diag_analytics', 'diag_tokens', 'diag_next_update',
         'enabled', 'disabled', 'not_exposed', 'check_config', 'unknown', 'cli',
         'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields',
@@ -537,6 +534,7 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
     """Build a token-free dashboard status payload."""
     claude_snap = app.cache.snapshot
     settings = dashboard_settings()
+    history = app.dashboard.history
     return {
         'app': {'name': 'Agents Pulse', 'version': __version__},
         'privacy': {
@@ -544,7 +542,7 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
             'token_free': True,
             'analytics': False,
         },
-        'next_poll_time': app._next_poll_time,
+        'next_poll_time': app.next_poll_time,
         'settings': {
             'prediction_enabled': settings.get('prediction_enabled', True),
             'prediction_day_end_time': settings.get('prediction_day_end_time', '18:00'),
@@ -554,23 +552,25 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
             'quiet_hours_end': settings.get('quiet_hours_end', '08:00'),
         },
         'providers': [
-            _provider_payload('claude', claude_snap, [{'name': i.name, 'version': i.version} for i in find_installations()]),
-            *_secondary_provider_payloads(app),
+            _provider_payload(
+                'claude', claude_snap, [{'name': i.name, 'version': i.version} for i in find_installations()], history,
+            ),
+            *_secondary_provider_payloads(app, history),
         ],
     }
 
 
-def _secondary_provider_payloads(app: AgentPulse) -> list[dict[str, Any]]:
+def _secondary_provider_payloads(app: AgentPulse, history: DashboardHistory) -> list[dict[str, Any]]:
     """Build the dashboard payload of every active non-Claude provider."""
     payloads = []
-    for provider, cache in app._secondary_caches():
-        version = _SECONDARY_CLI_VERSIONS[provider]()
+    for provider, cache in app.secondary_providers():
+        version = SECONDARY_PROVIDERS_BY_NAME[provider].cli_version()
         installations = [{'name': 'CLI', 'version': version}] if version else []
-        payloads.append(_provider_payload(provider, cache.snapshot, installations))
+        payloads.append(_provider_payload(provider, cache.snapshot, installations, history))
     return payloads
 
 
-def _provider_payload(provider: str, snap: Any, installations: list[dict[str, str]]) -> dict[str, Any]:
+def _provider_payload(provider: str, snap: Any, installations: list[dict[str, str]], history: DashboardHistory) -> dict[str, Any]:
     usage = []
     for key, value in snap.usage.items():
         if key == 'extra_usage':
@@ -586,6 +586,7 @@ def _provider_payload(provider: str, snap: Any, installations: list[dict[str, st
             'reset_text': time_until(resets_at) if resets_at else '',
             'period_seconds': field_period(key),
             'burn': _burn_payload(float(value.get('utilization') or 0), resets_at, field_period(key)),
+            'trend': _cycle_trend(history, provider, key),
         })
 
     return {
@@ -611,4 +612,81 @@ def _burn_payload(utilization: float, resets_at: str, period_seconds: int | None
         'eta_seconds': info['eta_seconds'],
         'healthy': info['healthy'],
         'pace_delta': info['pace_delta'],
+    }
+
+
+# A drop this large between consecutive samples of the same field is treated
+# as a quota reset (a new cycle) rather than ordinary fluctuation - usage
+# only ever increases within a cycle.
+_CYCLE_RESET_DROP = 5.0
+
+
+def _cycle_trend(history: DashboardHistory, provider: str, field: str, *, now: float | None = None) -> dict[str, Any] | None:
+    """Compare the current quota cycle's pace against past cycles at the same age.
+
+    Splits up to 30 days of persisted history into cycles at each detected
+    reset (a utilization drop), then compares the current cycle's
+    utilization to what past cycles had reached by the same elapsed time.
+    This is the insight a single cycle's burn rate can't give: whether
+    *this* cycle is running ahead of or behind the account's usual pace,
+    as opposed to whether it is on pace to exhaust the current window.
+
+    Parameters
+    ----------
+    history
+        The dashboard's persisted usage history.
+    provider, field
+        Identify which quota series to analyze (e.g. ``'claude'``, ``'seven_day'``).
+    now
+        Current time as a Unix timestamp; defaults to :func:`time.time`. Tests
+        pass this explicitly for determinism.
+
+    Returns
+    -------
+    dict or None
+        None when there is no complete previous cycle to compare against.
+        Otherwise a dict with ``current_pct``, ``historical_avg_pct``,
+        ``delta_pct`` (positive means running ahead of the historical pace),
+        and ``cycles_compared``.
+    """
+    now = time.time() if now is None else now
+    samples = sorted(
+        (row for row in history.rows('30d', now=now) if row['provider'] == provider and row['field'] == field and row['utilization'] is not None),
+        key=lambda row: row['ts'],
+    )
+    if len(samples) < 2:
+        return None
+
+    cycles: list[list[dict[str, Any]]] = [[]]
+    for index, row in enumerate(samples):
+        if index > 0 and row['utilization'] < samples[index - 1]['utilization'] - _CYCLE_RESET_DROP:
+            cycles.append([])
+        cycles[-1].append(row)
+
+    previous_cycles, current_cycle = cycles[:-1], cycles[-1]
+    if not previous_cycles or not current_cycle:
+        return None
+
+    current_start = current_cycle[0]['ts']
+    elapsed = now - current_start
+    if elapsed <= 0:
+        return None
+
+    comparable: list[float] = []
+    for cycle in previous_cycles:
+        cycle_start = cycle[0]['ts']
+        reached = [row for row in cycle if row['ts'] - cycle_start <= elapsed]
+        if reached:
+            comparable.append(reached[-1]['utilization'])
+
+    if not comparable:
+        return None
+
+    current_pct = current_cycle[-1]['utilization']
+    historical_avg_pct = sum(comparable) / len(comparable)
+    return {
+        'current_pct': current_pct,
+        'historical_avg_pct': historical_avg_pct,
+        'delta_pct': current_pct - historical_avg_pct,
+        'cycles_compared': len(comparable),
     }

@@ -90,6 +90,7 @@
     "dash_not_detected": "tidak terdeteksi",
     "dash_by_time": "{pct}% pada {time}",
     "dash_by_reset": "{pct}% saat reset",
+    "dash_vs_usual_pace": "{delta} dibanding laju biasa ({n} siklus)",
     "dash_ago": "{duration} lalu",
     "dash_diag_app": "Aplikasi",
     "dash_diag_bind": "Bind dasbor",

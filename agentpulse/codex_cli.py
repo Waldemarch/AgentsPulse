@@ -8,16 +8,38 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
+# npm global installs place a shim here on Windows
+# (`npm install -g @openai/codex`).
 CODEX_CLI_PATH = Path(os.environ.get('APPDATA', '')) / 'npm' / 'codex.cmd'
+CODEX_CLI_PATHS = (CODEX_CLI_PATH,)
 
 PROJECT_URL = 'https://github.com/openai/codex'
 
-__all__ = ['CODEX_CLI_PATH', 'PROJECT_URL', 'codex_version']
+__all__ = ['CODEX_CLI_PATH', 'CODEX_CLI_PATHS', 'PROJECT_URL', 'codex_cli_path', 'codex_version']
 
 _version_cache: dict[Path, tuple[float, str]] = {}
+
+
+def codex_cli_path() -> Path | None:
+    """Return the installed Codex CLI path, or None when none is present.
+
+    Tries the known npm shim location first, then falls back to a PATH
+    lookup so the PowerShell installer (`irm .../install.ps1 | iex`) and
+    manually placed binaries are found too - both add `codex` to PATH,
+    which is the only install-location guarantee they make.
+    """
+    for path in CODEX_CLI_PATHS:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    found = shutil.which('codex')
+    return Path(found) if found else None
 
 
 def codex_version() -> str:
@@ -26,8 +48,8 @@ def codex_version() -> str:
     Results are cached by file modification time so the subprocess is
     only spawned once per binary change.
     """
-    path = CODEX_CLI_PATH
-    if not path.is_file():
+    path = codex_cli_path()
+    if path is None:
         return ''
     try:
         mtime = path.stat().st_mtime

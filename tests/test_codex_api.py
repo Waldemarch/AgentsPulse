@@ -44,6 +44,31 @@ class TestReadAccessToken(unittest.TestCase):
             mock_path.read_text.return_value = json.dumps({'tokens': {}})
             self.assertIsNone(read_access_token())
 
+    def test_returns_none_when_tokens_is_null(self):
+        """An API-key-only login writes `"tokens": null` - must not raise."""
+        with patch('agentpulse.codex_api.CODEX_AUTH_FILE') as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = json.dumps({'tokens': None})
+            self.assertIsNone(read_access_token())
+
+    def test_returns_none_when_document_root_is_a_list(self):
+        with patch('agentpulse.codex_api.CODEX_AUTH_FILE') as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = json.dumps([])
+            self.assertIsNone(read_access_token())
+
+    def test_returns_none_when_access_token_is_not_a_string(self):
+        with patch('agentpulse.codex_api.CODEX_AUTH_FILE') as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = json.dumps({'tokens': {'access_token': 12345}})
+            self.assertIsNone(read_access_token())
+
+    def test_returns_none_on_os_error(self):
+        """Reading a directory or a permission-denied file must not raise."""
+        with patch('agentpulse.codex_api.CODEX_AUTH_FILE') as mock_path:
+            mock_path.read_text.side_effect = IsADirectoryError('Is a directory')
+            self.assertIsNone(read_access_token())
+
 
 class TestNormalizeUsage(unittest.TestCase):
     def _raw(self, primary_pct=10, primary_reset=1000000, secondary_pct=5, secondary_reset=2000000):

@@ -5,8 +5,9 @@ import locale as _locale
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import settings as _settings
 from .i18n import T
-from .settings import CURRENCY_SYMBOL, TOOLTIP_FIELDS, _SYSTEM_CURRENCY_SYMBOL
+from .settings import CURRENCY_SYMBOL, PROVIDER_LABELS, _SYSTEM_CURRENCY_SYMBOL
 
 __all__ = [
     'PERIOD_5H', 'PERIOD_7D',
@@ -274,7 +275,7 @@ def format_credits(cents: float) -> str:
 
 def _format_provider_lines(data: dict[str, Any]) -> list[str]:
     lines: list[str] = []
-    for key in TOOLTIP_FIELDS:
+    for key in _settings.TOOLTIP_FIELDS:
         item = data.get(key)
         if not isinstance(item, dict) or item.get('utilization') is None:
             continue
@@ -290,21 +291,52 @@ def _format_provider_lines(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _format_compact_line(name: str, data: dict[str, Any]) -> str:
+    """One-line 'Label 5h 34% 7d 80%' summary, without reset time or burn rate.
+
+    Used when the verbose per-field form (with reset time and burn rate)
+    doesn't fit every active provider within the tray tooltip's 128-char
+    limit, so providers are compacted together instead of the ones listed
+    last being silently dropped.
+    """
+    label = PROVIDER_LABELS.get(name, name.title())
+    parts = []
+    for key in _settings.TOOLTIP_FIELDS:
+        item = data.get(key)
+        if not isinstance(item, dict) or item.get('utilization') is None:
+            continue
+        parts.append(f"{tooltip_label(key)} {item.get('utilization', 0):.0f}%")
+    return f'{label} {" ".join(parts)}' if parts else label
+
+
+# Verbose tooltip heading per secondary provider, shown when it gets its own
+# section.  Not currently translated (no ``tooltip_title_<name>`` locale key
+# exists yet); the fallback covers any future provider too.
+def _secondary_heading(name: str) -> str:
+    fallback = f'{PROVIDER_LABELS.get(name, name.title())} Usage'
+    return T.get(f'tooltip_title_{name}', fallback)
+
+
 def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, Any]]] | None = None) -> str:
-    """Render compact tooltip text within the Windows tray limit.
+    """Render tooltip text within the Windows tray's 128-character limit.
 
     Parameters
     ----------
     data
         Claude usage data, always rendered first and without a heading.
     secondary
-        Additional providers as ``(heading, usage_data)`` pairs, rendered in
-        order below the Claude section.  The tray tooltip is capped at 128
-        characters and whole trailing lines are dropped to fit, so providers
-        listed last may not be visible with many tooltip fields configured.
+        Additional providers as ``(provider_name, usage_data)`` pairs (e.g.
+        ``('codex', {...})``), rendered in order below the Claude section.
+
+    When the verbose per-field lines (reset time, burn rate) for every
+    active provider fit within the limit, they are shown in full - this is
+    the common case with the default one or two tooltip fields.  When they
+    don't (more providers, more configured fields), every provider is
+    compacted onto a single summary line instead of the providers listed
+    last being silently dropped.
     """
     others = secondary or []
-    healthy = [entry for _heading, entry in others if entry and 'error' not in entry]
+    healthy = [(name, entry) for name, entry in others if entry and 'error' not in entry]
     if 'error' in data and not healthy:
         if data.get('auth_error'):
             return f"{T['auth_expired_label']}\n{T['auth_expired_short']}"
@@ -313,16 +345,27 @@ def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, An
             error = f"{error} {data['server_message']}"
         return f"{T['error_label']}\n{error[:80]}"
 
-    lines = [T['tooltip_title']]
+    sections: list[tuple[str | None, dict[str, Any]]] = []
     if 'error' not in data:
-        lines.extend(_format_provider_lines(data))
-    for heading, entry in others:
-        if not entry or 'error' in entry:
-            continue
-        lines.append(heading)
-        lines.extend(_format_provider_lines(entry))
+        sections.append((None, data))
+    sections.extend(healthy)
 
-    text = '\n'.join(lines)
+    verbose_lines = [T['tooltip_title']]
+    for name, entry in sections:
+        if name:
+            verbose_lines.append(_secondary_heading(name))
+        verbose_lines.extend(_format_provider_lines(entry))
+    text = '\n'.join(verbose_lines)
+    if len(text) <= 128 or len(sections) <= 1:
+        return _trim_to_line_boundary(text)
+
+    compact_lines = [T['tooltip_title']]
+    compact_lines.extend(_format_compact_line(name or 'claude', entry) for name, entry in sections)
+    return _trim_to_line_boundary('\n'.join(compact_lines))
+
+
+def _trim_to_line_boundary(text: str) -> str:
+    """Drop whole trailing lines until `text` fits the 128-char tooltip limit."""
     while len(text) > 128 and '\n' in text:
         text = text.rsplit('\n', 1)[0]
     return text[:128]

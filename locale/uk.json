@@ -90,6 +90,7 @@
     "dash_not_detected": "не виявлено",
     "dash_by_time": "{pct}% до {time}",
     "dash_by_reset": "{pct}% до скидання",
+    "dash_vs_usual_pace": "{delta} порівняно зі звичним темпом ({n} циклів)",
     "dash_ago": "{duration} тому",
     "dash_diag_app": "Застосунок",
     "dash_diag_bind": "Прив'язка панелі",

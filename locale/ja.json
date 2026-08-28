@@ -90,6 +90,7 @@
     "dash_not_detected": "検出されません",
     "dash_by_time": "{time}までに{pct}%",
     "dash_by_reset": "リセットまでに{pct}%",
+    "dash_vs_usual_pace": "通常ペース比 {delta}（{n}サイクル）",
     "dash_ago": "{duration}前",
     "dash_diag_app": "アプリ",
     "dash_diag_bind": "ダッシュボードのバインド",
