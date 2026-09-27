@@ -20,6 +20,11 @@
     --chart-grid: #e3e8f0;
     --chart-text: #64748b;
     --header-bg: rgba(255, 255, 255, 0.82);
+    /* One colour per provider in every chart; checked for colour-blind safety on both themes. */
+    --series-claude: #2a78d6;
+    --series-codex: #1baf7a;
+    --series-kimi: #eb6834;
+    --series-other: #898781;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -43,6 +48,9 @@
         --chart-grid: #2a3340;
         --chart-text: #8b97a8;
         --header-bg: rgba(17, 21, 28, 0.82);
+        --series-claude: #3987e5;
+        --series-codex: #199e70;
+        --series-kimi: #d95926;
     }
 }
 
@@ -98,7 +106,7 @@ header {
     .brand-mark { animation: none; }
 }
 
-h1, h2, p { margin: 0; }
+h1, h2, h3, p { margin: 0; }
 
 h1 {
     font-size: 19px;
@@ -124,7 +132,7 @@ h2 {
     align-items: center;
 }
 
-select, a, button, input {
+select, a, button, input, textarea {
     font: inherit;
     color: var(--text);
 }
@@ -177,7 +185,7 @@ button.primary {
 
 button.primary:hover { filter: brightness(1.08); }
 
-input {
+input, textarea {
     min-height: 36px;
     padding: 6px 10px;
     border: 1px solid var(--border);
@@ -185,7 +193,14 @@ input {
     background: var(--surface-raised);
 }
 
-input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
+textarea {
+    resize: vertical;
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
 }
@@ -266,10 +281,60 @@ section.card, .provider-card {
 .fill.high { background: linear-gradient(90deg, var(--warn), #f08c3a); }
 .fill.warn { background: linear-gradient(90deg, var(--danger), #c73030); }
 
-canvas {
-    width: 100%;
-    display: block;
+.chart-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
     margin-top: 14px;
+}
+
+.chart-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px 16px;
+}
+
+.chart-head h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.chart-legend-row { margin-top: 12px; }
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.legend-key {
+    width: 16px;
+    height: 3px;
+    border-radius: 2px;
+}
+
+.legend-key.variant {
+    height: 2px;
+    opacity: 0.6;
+}
+
+/* A fixed CSS height: the drawing code sizes the canvas from this box. */
+.chart-canvas {
+    width: 100%;
+    height: 200px;
+    display: block;
+    margin-top: 8px;
 }
 
 .diagnostics {

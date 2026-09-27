@@ -16,7 +16,7 @@ The app searches for this file in these locations (first match wins):
 2. **`$CLAUDE_CONFIG_DIR/agentpulse-settings.json`** (only if `CLAUDE_CONFIG_DIR` is set and differs from `~/.claude/`)
 3. **`~/.claude/agentpulse-settings.json`**
 
-Legacy `usage-monitor-settings.json` files are still read as a fallback. To start manually, create an empty file and add keys as needed. You can also use **Open Dashboard** -> **Settings** to create or update the canonical `agentpulse-settings.json` file next to the EXE (or project root when running from source). Settings are read at startup - after editing the file or saving from the dashboard, use the **Restart** option in the tray context menu to apply changes.
+Legacy `usage-monitor-settings.json` files are still read as a fallback. To start manually, create an empty file and add keys as needed. You can also use **Open Dashboard** -> **Settings** to create or update the canonical `agentpulse-settings.json` file next to the EXE (or project root when running from source). Settings are read at startup - after editing the file by hand, use the **Restart** option in the tray context menu to apply changes. Settings saved from the dashboard apply immediately, except switching Codex or Kimi monitoring on or off, which takes effect after a restart (the dashboard says so when you save).
 
 ## Alert thresholds
 
@@ -143,11 +143,11 @@ Kimi's membership also has a monthly credit pool that can freeze Kimi Code once 
 
 ## Local dashboard
 
-Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard keeps a token-free ring buffer of usage snapshots for up to 30 days (or 40,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range.
+Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard keeps a token-free ring buffer of usage snapshots for up to 30 days (or 40,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range. The 7-day and 30-day charts receive the history aggregated to the highest reading per 10 or 30 minutes, which keeps limit hits visible; the CSV export always contains every sample. The dashboard downloads history again only after a new reading arrives and pauses while its browser tab is in the background.
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands. It does not expose or write OAuth tokens.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
 
 History settings:
 

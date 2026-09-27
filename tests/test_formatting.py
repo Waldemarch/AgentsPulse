@@ -3,7 +3,7 @@ Formatting Tests
 =================
 
 Unit tests for parse_field_name(), tooltip_label(), elapsed_pct(),
-time_until(), format_tooltip(), and format_credits().
+burn_rate_info(), time_until(), format_tooltip(), and format_credits().
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from agentpulse.formatting import (
     PERIOD_5H, PERIOD_7D,
-    elapsed_pct, expand_popup_fields, field_period, format_credits, format_tooltip,
+    burn_rate_info, elapsed_pct, expand_popup_fields, field_period, format_burn_text, format_credits, format_tooltip,
     period_to_field_name,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
@@ -416,6 +416,78 @@ class TestElapsedPct(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# burn_rate_info / format_burn_text
+# ---------------------------------------------------------------------------
+
+@patch('agentpulse.formatting.datetime')
+class TestBurnRateInfo(unittest.TestCase):
+    """Tests for burn_rate_info() and format_burn_text()."""
+
+    NOW = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _setup(self, mock_dt):
+        mock_dt.now.return_value = self.NOW
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+
+    def _reset_in(self, **delta):
+        return (self.NOW + timedelta(**delta)).isoformat()
+
+    def test_eta_when_limit_comes_before_reset(self, mock_dt):
+        """Two hours into a 5 h window at 80%: 40 pp/h reaches 100% in 30 min, reset is 3 h away."""
+        self._setup(mock_dt)
+        info = burn_rate_info(80.0, self._reset_in(hours=3), PERIOD_5H)
+
+        self.assertAlmostEqual(info['eta_seconds'], 30 * 60)
+        self.assertFalse(info['healthy'])
+
+    def test_no_eta_when_window_resets_first(self, mock_dt):
+        """At 20% two hours in, 100% would take 8 more hours, but the window resets in 3."""
+        self._setup(mock_dt)
+        info = burn_rate_info(20.0, self._reset_in(hours=3), PERIOD_5H)
+
+        self.assertIsNone(info['eta_seconds'])
+        self.assertTrue(info['healthy'])
+
+    def test_no_eta_when_limit_and_reset_coincide(self, mock_dt):
+        """Reaching 100% exactly at the reset is not an exhaustion worth counting down to."""
+        self._setup(mock_dt)
+        info = burn_rate_info(40.0, self._reset_in(hours=3), PERIOD_5H)
+
+        self.assertIsNone(info['eta_seconds'])
+
+    def test_no_eta_at_zero_or_full_usage(self, mock_dt):
+        self._setup(mock_dt)
+
+        self.assertIsNone(burn_rate_info(0.0, self._reset_in(hours=3), PERIOD_5H)['eta_seconds'])
+        self.assertIsNone(burn_rate_info(100.0, self._reset_in(hours=3), PERIOD_5H)['eta_seconds'])
+
+    def test_weekly_eta_uses_the_weekly_window(self, mock_dt):
+        """Three days into a week at 60%: 20 pp/day reaches 100% in 2 days, reset is 4 days away."""
+        self._setup(mock_dt)
+        info = burn_rate_info(60.0, self._reset_in(days=4), PERIOD_7D)
+
+        self.assertAlmostEqual(info['eta_seconds'], 2 * 24 * 3600)
+
+    def test_none_without_reset_time(self, mock_dt):
+        self._setup(mock_dt)
+
+        self.assertIsNone(burn_rate_info(50.0, '', PERIOD_5H))
+
+    def test_none_before_window_started(self, mock_dt):
+        self._setup(mock_dt)
+
+        self.assertIsNone(burn_rate_info(50.0, self._reset_in(hours=5), PERIOD_5H))
+
+    def test_burn_text_shows_eta_only_when_limit_comes_first(self, mock_dt):
+        self._setup(mock_dt)
+        ahead = format_burn_text(80.0, self._reset_in(hours=3), PERIOD_5H)
+        on_pace = format_burn_text(20.0, self._reset_in(hours=3), PERIOD_5H)
+
+        self.assertEqual(ahead, EN['burn_eta'].format(duration=EN['duration_m'].format(m=30), pace=EN['pace_ahead']))
+        self.assertEqual(on_pace, EN['pace_healthy'])
+
+
+# ---------------------------------------------------------------------------
 # midnight_positions
 # ---------------------------------------------------------------------------
 
@@ -692,6 +764,13 @@ class TestFormatTooltip(unittest.TestCase):
     def test_with_reset_info(self, _mock_tu):
         data = {'five_hour': {'utilization': 42.0, 'resets_at': '2025-01-15T14:30:00+00:00'}}
         self.assertIn('Claude Usage\n5h: 42% (Resets in 2h 30m (14:30))', format_tooltip(data))
+        # The reset lies in the past, so there is no exhaustion left to count down to.
+        self.assertNotIn('ETA', format_tooltip(data))
+
+    @patch('agentpulse.formatting.time_until', return_value='Resets in 3h 0m (15:00)')
+    def test_eta_shown_when_limit_comes_before_reset(self, _mock_tu):
+        reset = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        data = {'five_hour': {'utilization': 80.0, 'resets_at': reset}}
         self.assertIn('ETA', format_tooltip(data))
 
     @patch('agentpulse.formatting.time_until', return_value='')
