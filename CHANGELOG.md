@@ -19,6 +19,9 @@
 - The **Show Claude Code versions** popup setting is now off by default.
 - The detail popup now uses thicker quota bars with clearer provider labels when Claude and Codex usage are shown together.
 - The dashboard has a modernized look: automatic light/dark theme following the system setting, toggle switches for on/off settings, gradient progress bars with an early warning color at 80%, and refreshed cards, charts, and heatmap.
+- The dashboard's usage history is split into one chart per quota period (session, weekly) with a legend and a time axis, and every chart uses one color per provider that stays distinguishable for color-blind users in both themes.
+- The dashboard loads 7- and 30-day history aggregated to the highest reading per 10 or 30 minutes (the CSV export still has every sample), downloads history only after a new reading, and pauses while its tab is in the background, instead of downloading every sample again every 15 seconds.
+- Saving settings in the dashboard now simply confirms the save and asks for a restart only when Codex or Kimi monitoring was switched on or off; the message no longer shows the settings file's location.
 
 ### Fixed
 
@@ -32,3 +35,12 @@
 - **Test Reset** and **Test Threshold** (tray menu and dashboard) now set the same `AGENTPULSE_*` environment variables documented in [event-commands.md](docs/event-commands.md) that real reset and threshold events use, including `AGENTPULSE_PROVIDER`. Previously they only set the legacy `USAGE_MONITOR_*` variables, so a command written against the current docs would silently do nothing when tested.
 - Claude Code and Codex CLI detection (installed-version display and Claude's automatic token refresh) now also finds installs made via npm or added to PATH, not just the native installer's default location - matching how Kimi Code CLI detection already worked.
 - Alert time-awareness settings (`alert_time_aware`, `alert_time_aware_below`) and the tray tooltip's `tooltip_fields` setting now take effect immediately after saving from the dashboard, instead of requiring a restart like the rest of the settings that already applied live.
+- Dashboard charts no longer grow taller on every refresh when Windows display scaling is above 100% (for example 125% or 150%).
+- The dashboard's usage history now includes every quota the API reports, such as the per-model weekly limits, instead of only the session and weekly quotas.
+- Chart lines no longer run diagonally across hours without readings (overnight, while the PC was locked) or across a quota reset, and the burn-rate chart no longer plunges at every reset.
+- Chart axis labels no longer overlap, and values outside a chart's range no longer spill outside it.
+- The dashboard's end-of-day prediction no longer projects a 5-hour session past its reset (a window that resets before the target time shows its projection at reset instead), and predictions stop at 100% instead of showing values such as 999%.
+- The usage heatmap no longer counts the same work several times by adding up the session, weekly, and per-model quotas; it now uses each provider's weekly quota, color, and scale.
+- Saving settings from the dashboard no longer merges several event commands into one `&&` chain that stops at the first failing command; each command is edited on its own line and still runs independently.
+- The dashboard's script and styles are always served with the correct content type instead of the one registered in Windows, which could leave the dashboard blank on systems where other software registered `.js` files as plain text.
+- The ETA in the popup, tooltip, and dashboard is shown only when the quota would run out before it resets; a quota that is on pace no longer shows an ETA later than its reset time.

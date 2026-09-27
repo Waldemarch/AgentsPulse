@@ -34,7 +34,7 @@
             <h2 data-i18n="usage_history">Usage History</h2>
             <span id="historyMeta"></span>
         </div>
-        <canvas id="usageChart" height="260"></canvas>
+        <div id="usageCharts" class="chart-stack"></div>
     </section>
 
     <section class="card">
@@ -42,7 +42,8 @@
             <h2 data-i18n="burn_rate">Burn Rate</h2>
             <span id="burnMeta"></span>
         </div>
-        <canvas id="burnChart" height="220"></canvas>
+        <div id="burnLegend" class="chart-legend-row"></div>
+        <canvas id="burnChart" class="chart-canvas"></canvas>
     </section>
 
     <section id="predictionSection" class="card">
@@ -72,7 +73,7 @@
     <section class="card">
         <div class="section-head">
             <h2 data-i18n="settings">Settings</h2>
-            <span id="settingsStatus" data-i18n="restart_required">restart required after save</span>
+            <span id="settingsStatus" role="status"></span>
         </div>
         <form id="settingsForm" class="settings-grid">
             <label class="toggle"><span data-i18n="autostart">Start with Windows</span><input id="autostartEnabled" type="checkbox"></label>
@@ -91,8 +92,8 @@
             <label><span data-i18n="predict_until">Predict day until</span><input id="predictionDayEnd" type="time"></label>
             <label><span data-i18n="quiet_starts">Quiet starts</span><input id="quietHoursStart" type="time"></label>
             <label><span data-i18n="quiet_ends">Quiet ends</span><input id="quietHoursEnd" type="time"></label>
-            <label><span data-i18n="reset_command">Reset command</span><input id="resetCommand" type="text"></label>
-            <label><span data-i18n="threshold_command">Threshold command</span><input id="thresholdCommand" type="text"></label>
+            <label><span data-i18n="reset_command">Reset commands (one per line)</span><textarea id="resetCommand" rows="2" spellcheck="false"></textarea></label>
+            <label><span data-i18n="threshold_command">Threshold commands (one per line)</span><textarea id="thresholdCommand" rows="2" spellcheck="false"></textarea></label>
             <div class="settings-actions">
                 <button type="submit" class="primary" data-i18n="save_settings">Save Settings</button>
                 <button type="button" id="testReset" data-i18n="test_reset">Test Reset</button>

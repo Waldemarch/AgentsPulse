@@ -165,6 +165,26 @@ def elapsed_pct(resets_at: str, period_seconds: int) -> float | None:
 
 
 def burn_rate_info(utilization: float, resets_at: str, period_seconds: int | None) -> dict[str, Any] | None:
+    """Describe the average pace of the current quota window.
+
+    Parameters
+    ----------
+    utilization
+        Current usage in percent.
+    resets_at
+        ISO timestamp of the window's reset.
+    period_seconds
+        Window length (e.g. five hours for ``five_hour``).
+
+    Returns
+    -------
+    dict or None
+        None without a usable reset time or before the window has started.
+        Otherwise ``time_pct`` (elapsed share of the window), ``burn_per_hour``,
+        ``eta_seconds`` (time until 100% at the current pace, or None when the
+        window resets first), ``healthy`` (usage not ahead of elapsed time)
+        and ``pace_delta``.
+    """
     if not resets_at or not period_seconds or period_seconds <= 0:
         return None
     try:
@@ -181,7 +201,10 @@ def burn_rate_info(utilization: float, resets_at: str, period_seconds: int | Non
     hourly = utilization / (elapsed / 3600.0)
     eta = None
     if 0 < utilization < 100 and hourly > 0:
-        eta = (100.0 - utilization) / hourly * 3600.0
+        seconds_to_limit = (100.0 - utilization) / hourly * 3600.0
+        # Past the reset the window starts over, so there is nothing to count down to.
+        if seconds_to_limit < remaining:
+            eta = seconds_to_limit
     return {
         'time_pct': time_pct,
         'burn_per_hour': hourly,
