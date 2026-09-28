@@ -17,6 +17,7 @@ from agentpulse.app import AgentPulse, _is_quiet_time
 from agentpulse.cache import UpdateResult
 from agentpulse.claude_cli import RefreshResult
 from agentpulse.dashboard import DashboardHistory
+from agentpulse.i18n import T
 
 
 def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
@@ -1442,6 +1443,120 @@ class TestQuotaOutlooks(unittest.TestCase):
         self.assertEqual(outlooks['five_hour'].status, 'ok')
         self.assertIsNone(outlooks['five_hour'].forecast_pct)
         self.assertEqual(outlooks['seven_day'].status, 'blocked')
+
+
+class TestStatusline(unittest.TestCase):
+    """Tests for statusline_text() and serving the Claude Code status line."""
+
+    def setUp(self):
+        self.app = _make_app()
+        self.now = time.time()
+        fields = patch('agentpulse.settings.TOOLTIP_FIELDS', ['five_hour', 'seven_day'])
+        fields.start()
+        self.addCleanup(fields.stop)
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _usage(self, pct: float, hours: float, field: str = 'five_hour') -> dict:
+        reset = datetime.fromtimestamp(self.now + hours * 3600, tz=timezone.utc).isoformat()
+        return {field: {'utilization': pct, 'resets_at': reset}}
+
+    def _render(self) -> None:
+        with patch('agentpulse.app.format_tooltip', return_value='tooltip'), patch('agentpulse.app.create_icon_image'):
+            self.app._render_tray()
+
+    def test_shows_the_latest_claude_reading(self):
+        self.app._last_response = {'five_hour': {'utilization': 42.0, 'resets_at': ''}, 'seven_day': {'utilization': 61.0, 'resets_at': ''}}
+
+        self.assertEqual(self.app.statusline_text(color=False), 'Claude 5h 42% · 7d 61%')
+
+    def test_before_the_first_reading_it_says_loading(self):
+        self.assertEqual(self.app.statusline_text(), T['loading'])
+
+    def test_render_keeps_the_outlooks_for_the_status_line(self):
+        outlooks = {'claude': {}}
+        self.app._last_response = {'five_hour': {'utilization': 42.0}}
+
+        with patch.object(self.app, 'quota_outlooks', return_value=outlooks):
+            self._render()
+
+        self.assertIs(self.app._last_outlooks, outlooks)
+
+    def test_a_status_line_refresh_computes_no_forecast(self):
+        self.app._last_response = self._usage(42.0, 2)
+
+        with patch.object(self.app, 'quota_outlooks') as mock_outlooks:
+            self.app.statusline_text()
+
+        mock_outlooks.assert_not_called()
+
+    def test_shows_the_forecast_status_of_the_last_update(self):
+        usage = self._usage(100.0, 1)
+        self.app.cache = MagicMock()
+        self.app.cache.snapshot.usage = usage
+        self.app._last_response = usage
+        self._render()
+
+        self.assertIn(T['status_blocked'], self.app.statusline_text(color=False))
+
+    def test_secondary_providers_follow_claude(self):
+        self.app._last_response = {'five_hour': {'utilization': 42.0, 'resets_at': ''}}
+        self.app.codex_cache = MagicMock()
+        self.app._secondary_responses = {'codex': {'five_hour': {'utilization': 10.0, 'resets_at': ''}}}
+
+        self.assertEqual(self.app.statusline_text(color=False), 'Claude 5h 42% | Codex 5h 10%')
+        self.assertEqual(self.app.statusline_text(provider='codex', color=False), 'Codex 5h 10%')
+
+    def test_secondary_provider_before_its_first_reading_is_left_out(self):
+        self.app._last_response = {'five_hour': {'utilization': 42.0, 'resets_at': ''}}
+        self.app.kimi_cache = MagicMock()
+
+        self.assertEqual(self.app.statusline_text(color=False), 'Claude 5h 42%')
+
+    def test_provider_that_is_not_active_gives_an_empty_line(self):
+        self.app._last_response = {'five_hour': {'utilization': 42.0, 'resets_at': ''}}
+        self.app.kimi_cache = None
+
+        self.assertEqual(self.app.statusline_text(provider='kimi'), '')
+
+    @patch('agentpulse.settings.STATUSLINE_ENABLED', True)
+    def test_server_starts_while_turned_on(self):
+        with patch.object(self.app.dashboard, 'start') as mock_start:
+            self.app._serve_statusline()
+
+        mock_start.assert_called_once_with()
+
+    @patch('agentpulse.settings.STATUSLINE_ENABLED', False)
+    def test_server_waits_for_the_dashboard_while_turned_off(self):
+        with patch.object(self.app.dashboard, 'start') as mock_start:
+            self.app._serve_statusline()
+
+        mock_start.assert_not_called()
+
+    @patch('agentpulse.settings.STATUSLINE_ENABLED', True)
+    def test_no_free_port_leaves_the_app_running(self):
+        with patch.object(self.app.dashboard, 'start', side_effect=OSError('address in use')) as mock_start:
+            self.app._serve_statusline()
+
+        mock_start.assert_called_once_with()
+
+    @patch('agentpulse.settings.STATUSLINE_ENABLED', True)
+    def test_turning_it_on_in_the_dashboard_keeps_the_server_running(self):
+        with patch.object(self.app.dashboard, 'start') as mock_start:
+            self.app.apply_settings()
+
+        mock_start.assert_called_once_with()
+
+    def test_startup_serves_the_status_line_before_polling(self):
+        order = []
+        with patch.object(self.app, '_serve_statusline', side_effect=lambda: order.append('serve')), \
+             patch.object(self.app, 'poll_loop', side_effect=lambda: order.append('poll')), \
+             patch('agentpulse.app.api_headers', return_value={'Authorization': 'Bearer test'}), \
+             patch('agentpulse.app.watch_theme_change'):
+            self.app._on_icon_ready(MagicMock())
+
+        self.assertEqual(order, ['serve', 'poll'])
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@
 - **Tray icon styles** - the tray icon shows every provider's session usage at a glance as one bar per provider (the default), as rings that fill up and turn solid red at 95%, or as your highest percentage in digits; choose with the `icon_style` setting or in the dashboard's settings, and the change applies immediately.
 - While every provider is at its limit, the tray icon counts down to the reset, then shows a green check mark for ten minutes once you can work again.
 - The popup has **Dashboard** and **Refresh** buttons and marks every provider with its own color.
+- **Claude Code status line** - turn it on in the dashboard settings and paste the entry shown there into `~/.claude/settings.json` to see every provider's session and weekly usage, the session reset time, and a colored warning for tight quotas or limits right below the Claude Code prompt.
 
 ### Changed
 

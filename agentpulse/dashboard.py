@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from . import settings as _settings
 from .claude_cli import find_installations
 from .forecast import CYCLE_RESET_TOLERANCE, Sample, next_local_time, quota_cycles, reset_timestamp, usage_outlooks
 from .formatting import field_period, field_sort_key, parse_field_name, popup_label, time_until
@@ -443,6 +444,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(_dashboard_i18n())
         elif path == '/api/status':
             self._send_json(_status_payload(self.dashboard_app))
+        elif path == '/api/statusline':
+            self._send_statusline(params)
         elif path == '/api/history':
             range_name = params.get('range', ['24h'])[0]
             self._send_json(_history_payload(self.dashboard_history, range_name))
@@ -502,6 +505,26 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({'ok': False, 'errors': ['event must be reset or threshold']})
         else:
             self.send_error(404)
+
+    def _send_statusline(self, params: dict[str, list[str]]) -> None:
+        """Serve the Claude Code status line as one line of plain text while that feature is turned on.
+
+        Read-only and token-free like ``/api/status``: a command such as
+        ``curl`` cannot know the per-run token, and the loopback and ``Host``
+        checks in :meth:`do_GET` still apply.  ``provider`` limits the line to
+        one provider and ``color=0`` drops the ANSI colour codes.
+        """
+        if not _settings.STATUSLINE_ENABLED:
+            self.send_error(404)
+            return
+        providers = params.get('provider')
+        provider = providers[0] if providers else None
+        if provider is not None and provider not in PROVIDER_LABELS:
+            self.send_error(400)
+            return
+        color = params.get('color', ['1'])[0] != '0'
+        text = self.dashboard_app.statusline_text(provider=provider, color=color)
+        self._send_bytes(f'{text}\n'.encode('utf-8'), 'text/plain; charset=utf-8')
 
     def _send_json(self, payload: dict[str, Any]) -> None:
         self._send_bytes(json.dumps(payload, separators=(',', ':')).encode('utf-8'), 'application/json; charset=utf-8')
@@ -584,6 +607,7 @@ def _dashboard_i18n() -> dict[str, str]:
         'forecast_from_pace', 'forecast_from_history', 'forecast_from_average',
         'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
         'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
+        'group_statusline', 'statusline_enabled', 'statusline_hint', 'copy', 'copied',
         'icon_style', 'icon_bars', 'icon_rings', 'icon_number', 'restart_note',
         'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields', 'predictions',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',

@@ -23,7 +23,7 @@ __all__ = [
     'POLL_ERROR', 'POLL_FAST', 'POLL_FAST_EXTRA', 'POLL_INTERVAL',
     'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED', 'PROVIDER_COLORS', 'PROVIDER_LABELS',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
-    'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
+    'SETTINGS_FILENAME', 'STATUSLINE_ENABLED', 'TOOLTIP_FIELDS',
     'dashboard_settings', 'get_alert_thresholds', 'history_write_path', 'reload', 'save_dashboard_settings', 'settings_write_path',
     'EMAIL_DISPLAY', 'SHOW_INSTALL_SECTION',
 ]
@@ -48,7 +48,10 @@ _MIN_INTS = {
     'idle_pause': 0,
 }
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_tight', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
-_BOOLEANS = {'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
+_BOOLEANS = {
+    'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled',
+    'show_install_section', 'statusline_enabled',
+}
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
 _TIMES = {'prediction_day_end_time', 'quiet_hours_start', 'quiet_hours_end'}
@@ -63,7 +66,7 @@ _DASHBOARD_KEYS = {
     'on_reset_command', 'on_threshold_command',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
-    'show_install_section', 'email_display', 'icon_style',
+    'show_install_section', 'email_display', 'icon_style', 'statusline_enabled',
 }
 
 
@@ -294,7 +297,7 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = value
             else:
                 errors.append(f'{key}: invalid value')
-        elif key in {'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled'}:
+        elif key in {'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'statusline_enabled'}:
             if isinstance(value, bool):
                 accepted[key] = value
             else:
@@ -350,6 +353,7 @@ def dashboard_settings() -> dict[str, object]:
         'quiet_hours_start': QUIET_HOURS_START,
         'quiet_hours_end': QUIET_HOURS_END,
         'icon_style': ICON_STYLE,
+        'statusline_enabled': STATUSLINE_ENABLED,
     }
 
 
@@ -391,6 +395,7 @@ HISTORY_PERSIST = _S.get('history_persist', True)
 PREDICTION_ENABLED = _S.get('prediction_enabled', True)
 PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
 HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
+STATUSLINE_ENABLED = _S.get('statusline_enabled', False)
 QUIET_HOURS_ENABLED = _S.get('quiet_hours_enabled', False)
 QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
 QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
@@ -479,7 +484,7 @@ def reload() -> None:
     global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END
     global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
-    global HEATMAP_ENABLED, CODEX_ENABLED, KIMI_ENABLED
+    global HEATMAP_ENABLED, STATUSLINE_ENABLED, CODEX_ENABLED, KIMI_ENABLED
     global ICON_FIELDS, ICON_STYLE, TOOLTIP_FIELDS
     global ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW
     global SHOW_INSTALL_SECTION, EMAIL_DISPLAY
@@ -494,6 +499,7 @@ def reload() -> None:
     PREDICTION_ENABLED = _S.get('prediction_enabled', True)
     PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
     HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
+    STATUSLINE_ENABLED = _S.get('statusline_enabled', False)
     CODEX_ENABLED = _S.get('codex_enabled', True)
     KIMI_ENABLED = _S.get('kimi_enabled', True)
     ICON_FIELDS = _S.get('icon_fields', ['five_hour', 'seven_day'])

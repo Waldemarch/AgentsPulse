@@ -131,6 +131,17 @@
             <label class="wide"><span data-i18n="predict_until">Predict day until</span><input id="predictionDayEnd" type="time"></label>
             <label class="toggle wide"><span data-i18n="heatmap">Heatmap</span><input id="heatmapEnabled" type="checkbox"></label>
         </fieldset>
+        <fieldset class="set-group">
+            <legend data-i18n="group_statusline">Claude Code status line</legend>
+            <label class="toggle wide">
+                <span data-i18n="statusline_enabled">Show usage in the Claude Code status line</span>
+                <input id="statuslineEnabled" type="checkbox">
+            </label>
+            <p id="statuslinePreview" class="wide statusline-preview" hidden></p>
+            <p class="wide set-note" data-i18n="statusline_hint">Keeps the local server running with the app. Add this to ~/.claude/settings.json:</p>
+            <pre id="statuslineSnippet" class="wide snippet"></pre>
+            <div class="wide inline-actions"><button type="button" id="copyStatusline" data-i18n="copy">Copy</button></div>
+        </fieldset>
     </form>
     <div class="drawer-foot">
         <span id="settingsStatus" role="status"></span>

@@ -1137,6 +1137,70 @@ class TestIconStyleSettings(unittest.TestCase):
                     settings_mod.save_dashboard_settings({'icon_style': original})
 
 
+class TestStatuslineSettings(unittest.TestCase):
+    """Tests for the statusline_enabled setting (Claude Code status line)."""
+
+    def _run_validate(self, data: dict) -> tuple[dict, MagicMock]:
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate(dict(data), Path('/fake/settings.json'))
+        return result, mock_ctypes
+
+    def test_off_without_a_settings_file(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.reload()
+                    self.assertFalse(settings_mod.STATUSLINE_ENABLED)
+            finally:
+                # Back to the values of the real settings files.
+                settings_mod.reload()
+
+    def test_file_accepts_true_and_false(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                result, mock = self._run_validate({'statusline_enabled': value})
+                self.assertIs(result['statusline_enabled'], value)
+                mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_file_drops_a_non_boolean_with_a_message(self):
+        result, mock = self._run_validate({'statusline_enabled': 'yes'})
+
+        self.assertNotIn('statusline_enabled', result)
+        mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_dashboard_can_turn_it_on(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'statusline_enabled': True})
+
+        self.assertEqual((accepted, errors), ({'statusline_enabled': True}, []))
+
+    def test_dashboard_rejects_a_non_boolean(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'statusline_enabled': 1})
+
+        self.assertEqual(accepted, {})
+        self.assertTrue(errors)
+
+    def test_dashboard_settings_expose_it(self):
+        self.assertIsInstance(settings_mod.dashboard_settings()['statusline_enabled'], bool)
+
+    def test_saved_value_applies_without_a_restart(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            original = settings_mod.STATUSLINE_ENABLED
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    ok, _errors, _path = settings_mod.save_dashboard_settings({'statusline_enabled': True})
+                    self.assertTrue(ok)
+                    self.assertTrue(settings_mod.STATUSLINE_ENABLED)
+            finally:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.save_dashboard_settings({'statusline_enabled': original})
+
+
 class TestPopupColorSettings(unittest.TestCase):
     """Tests for the tight bar colour and the provider colours."""
 
