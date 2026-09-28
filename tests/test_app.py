@@ -19,6 +19,11 @@ from agentpulse.claude_cli import RefreshResult
 def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
     """Create an AgentPulse app with mocked icon and configurable thresholds.
 
+    Idle and lock detection report an active, unlocked session instead of the
+    state of the machine running the tests, so alerts are not deferred on a
+    runner that has had no keyboard input for a while. Tests of the away state
+    patch these probes themselves.
+
     Parameters
     ----------
     thresholds : list[float] or None
@@ -35,11 +40,17 @@ def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
     app.icon = MagicMock()
     app._thresholds_patch = patch('agentpulse.app.get_alert_thresholds', return_value=thresholds)
     app._thresholds_patch.start()
+    app._idle_patch = patch('agentpulse.app.get_idle_seconds', return_value=0.0)
+    app._idle_patch.start()
+    app._locked_patch = patch('agentpulse.app.is_workstation_locked', return_value=False)
+    app._locked_patch.start()
     return app
 
 
 def _cleanup(app: AgentPulse) -> None:
     """Stop patches started by _make_app."""
+    app._locked_patch.stop()
+    app._idle_patch.stop()
     app._thresholds_patch.stop()
 
 
@@ -1415,6 +1426,35 @@ class TestIsUserAway(unittest.TestCase):
     def test_active_user_not_away(self, _idle, _locked):
         """User is not away when active (0 idle seconds)."""
         self.assertFalse(self.app._is_user_away())
+
+
+class TestMakeAppMachineState(unittest.TestCase):
+    """The test app ignores the idle and lock state of the machine running the tests."""
+
+    @patch('agentpulse.app.is_workstation_locked', return_value=True)
+    @patch('agentpulse.app.get_idle_seconds', return_value=3600.0)
+    @patch('agentpulse.app.IDLE_PAUSE', 300)
+    def test_idle_locked_machine_does_not_defer_alerts(self, _idle, _locked):
+        """A runner without input for an hour or on a locked desktop still shows the alerts under test."""
+        app = _make_app()
+        try:
+            self.assertFalse(app._is_user_away())
+            app._notify_or_defer('threshold_five_hour', 'message', 'title')
+            app.icon.notify.assert_called_once_with('message', 'title')
+            self.assertEqual(app._deferred_notifications, {})
+        finally:
+            _cleanup(app)
+
+    @patch('agentpulse.app.is_workstation_locked', return_value=True)
+    @patch('agentpulse.app.get_idle_seconds', return_value=3600.0)
+    @patch('agentpulse.app.IDLE_PAUSE', 300)
+    def test_cleanup_restores_idle_and_lock_probes(self, _idle, locked_probe):
+        """After cleanup the app reads the probes that were in place before it was created."""
+        app = _make_app()
+        _cleanup(app)
+
+        self.assertTrue(app._is_user_away())
+        locked_probe.assert_called()
 
 
 # ---------------------------------------------------------------------------
