@@ -17,8 +17,8 @@ import urllib.parse
 import webbrowser
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone, tzinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
@@ -26,13 +26,15 @@ from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .claude_cli import find_installations
-from .formatting import field_period, parse_field_name, popup_label, time_until
+from .forecast import CYCLE_RESET_TOLERANCE, Sample, next_local_time, quota_cycles, reset_timestamp, usage_outlooks
+from .formatting import field_period, field_sort_key, parse_field_name, popup_label, time_until
 from .i18n import T
 from .providers import SECONDARY_PROVIDERS_BY_NAME
 from .settings import (
     DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST, PROVIDER_LABELS,
     dashboard_settings, history_write_path, save_dashboard_settings,
 )
+from .usage_stats import HEATMAP_DAYS, bucket_starts, consumption_buckets, consumption_field, heatmap_cells
 
 if TYPE_CHECKING:
     from .app import AgentPulse
@@ -71,10 +73,12 @@ _STATIC_FILES = {
 # Dashboard settings that only take effect after a restart, because provider
 # caches are created once at startup.  Every other setting applies immediately.
 _RESTART_KEYS = ('codex_enabled', 'kimi_enabled')
-# Samples whose reset times differ by less than this belong to one quota cycle:
-# the APIs repeat the same reset moment with jitter of up to a few seconds on
-# every poll, while a real reset moves it by hours or days.
-_CYCLE_RESET_TOLERANCE = 10 * 60
+# Consumption bars per range: one per local hour for a day, one per local day otherwise.
+_CONSUMPTION_BUCKETS = {
+    '24h': ('hour', 24),
+    '7d': ('day', 7),
+    '30d': ('day', 30),
+}
 # Sent on every response. The dashboard loads only its own same-origin assets,
 # so a strict policy needs no exceptions.  ``no-referrer`` keeps the per-run
 # session token (passed in the open URL before the page strips it) out of any
@@ -92,14 +96,6 @@ class _Snapshot:
     provider: str
     usage: dict[str, dict[str, Any]]
     error: str | None
-
-
-@dataclass
-class _Cycle:
-    """One quota window of a series: its reset time and ``(ts, utilization)`` samples."""
-
-    reset: float
-    samples: list[tuple[float, float]]
 
 
 class DashboardHistory:
@@ -176,6 +172,32 @@ class DashboardHistory:
                     'error': item.error,
                 })
         return rows
+
+    def series(self, *, since: float | None = None) -> dict[str, dict[str, list[Sample]]]:
+        """Return the stored readings grouped by provider and quota field, oldest first.
+
+        Parameters
+        ----------
+        since
+            Leave out readings before this Unix time; all stored readings by default.
+
+        Returns
+        -------
+        dict
+            ``{provider: {field: [Sample, ...]}}``.  Providers whose snapshots
+            were all errors map to an empty dict.
+        """
+        with self._lock:
+            items = list(self._items)
+
+        grouped: dict[str, dict[str, list[Sample]]] = {}
+        for item in items:
+            if since is not None and item.ts < since:
+                continue
+            fields = grouped.setdefault(item.provider, {})
+            for field, entry in item.usage.items():
+                fields.setdefault(field, []).append(Sample(item.ts, entry['utilization'], reset_timestamp(entry['resets_at'])))
+        return grouped
 
     def to_csv(self, range_name: str = '24h') -> str:
         """Return history rows as CSV."""
@@ -465,6 +487,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             errors = autostart_errors + errors
             ok = ok and not errors
             restart_required = ok and _needs_restart(payload, self.startup_settings)
+            if ok:
+                self.dashboard_app.apply_settings()
             self._send_json({'ok': ok, 'errors': errors, 'restart_required': restart_required})
         elif parsed.path == '/api/test-event':
             event = payload.get('event') if isinstance(payload, dict) else None
@@ -544,33 +568,44 @@ def _dashboard_i18n() -> dict[str, str]:
 
     The dashboard is a static page served locally, so its text is localized
     on the client: it fetches this map once and applies it to both the static
-    labels and the dynamically rendered widgets.  Reused keys (``usage``,
-    ``pace_healthy`` ...) share the same translations as the tray popup.
+    labels and the dynamically rendered widgets.  Keys shared with the tray and
+    popup (status texts, durations, weekdays) keep their translations there;
+    weekdays are sent as ``weekday_0`` (Monday) to ``weekday_6``.
     """
     keys = [
-        'subtitle', 'range_24h', 'range_7d', 'range_30d', 'export_csv',
-        'usage_history', 'burn_rate', 'predictions', 'heatmap', 'diagnostics', 'settings',
-        'diag_sub', 'restart_required', 'pp_per_hour', 'heatmap_meta', 'day_target', 'rows',
-        'waiting', 'waiting_usage', 'waiting_enough', 'waiting_history', 'no_reset', 'not_detected',
-        'by_time', 'by_reset', 'vs_usual_pace', 'ago',
-        'diag_app', 'diag_bind', 'diag_analytics', 'diag_tokens', 'diag_next_update',
-        'enabled', 'disabled', 'not_exposed', 'check_config', 'unknown', 'cli',
-        'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields',
+        'subtitle', 'range_24h', 'range_7d', 'range_30d', 'range_label', 'export_csv', 'settings', 'close',
+        'live', 'next_reading', 'now_label', 'series_label', 'provider_label', 'render_failed',
+        'summary_ok', 'summary_tight', 'summary_limit', 'summary_limit_at', 'summary_blocked', 'summary_waiting', 'summary_error',
+        'usage_history', 'history_label', 'points_raw', 'points_bucketed', 'show_table', 'rows',
+        'table_hour', 'table_day', 'table_note_hour', 'table_note_day',
+        'consumption_daily', 'consumption_hourly', 'consumption_meta', 'consumption_meta_mixed', 'pp',
+        'heatmap', 'heatmap_cell', 'heatmap_peak', 'heatmap_less', 'heatmap_more',
+        'meter_used', 'gap_before_reset', 'by_time', 'vs_usual_pace',
+        'forecast_from_pace', 'forecast_from_history', 'forecast_from_average',
+        'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
+        'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
+        'icon_style', 'icon_bars', 'icon_rings', 'icon_number', 'restart_note',
+        'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields', 'predictions',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
         'thr_kimi_5h', 'thr_kimi_7d',
         'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command',
-        'save_settings', 'test_reset', 'test_threshold',
+        'save_settings', 'test_reset', 'test_threshold', 'restart_required',
         'saved', 'error', 'session_expired', 'test_fired', 'test_failed', 'unknown_error',
         'connection_lost',
     ]
     strings = {key: T[f'dash_{key}'] for key in keys}
-    strings['autostart'] = T['autostart']
-    strings['pace_healthy'] = T['pace_healthy']
-    strings['pace_ahead'] = T['pace_ahead']
+    shared = [
+        'autostart', 'status_ok', 'status_tight', 'status_limit', 'status_limit_at', 'status_blocked', 'status_refreshing',
+        'forecast_at_reset', 'clock_tomorrow', 'clock_weekday', 'duration_m', 'duration_hm', 'duration_dh',
+    ]
+    for key in shared:
+        strings[key] = T[key]
+    for index, name in enumerate(T['weekdays']):
+        strings[f'weekday_{index}'] = name
     return strings
 
 
-def _history_payload(history: DashboardHistory, range_name: str, *, now: float | None = None) -> dict[str, Any]:
+def _history_payload(history: DashboardHistory, range_name: str, *, now: float | None = None, tz: tzinfo | None = None) -> dict[str, Any]:
     """Build the chart payload for one history range.
 
     Rows are aggregated to the range's ``_CHART_BUCKETS`` size, and every quota
@@ -586,21 +621,29 @@ def _history_payload(history: DashboardHistory, range_name: str, *, now: float |
         ``'24h'``, ``'7d'`` or ``'30d'``; anything else falls back to ``'24h'``.
     now
         Current time as a Unix timestamp; defaults to :func:`time.time`.
+    tz
+        Time zone of the hour and day boundaries; the system's local time by default.
 
     Returns
     -------
     dict
-        ``range``, ``bucket_seconds``, ``rows`` and ``fields``.
+        ``range``, ``bucket_seconds``, ``rows``, ``fields``, ``consumption``
+        (points used per hour or day, see :func:`_consumption_payload`) and
+        ``heatmap`` (see :func:`_heatmap_payload`).
     """
     if range_name not in _RANGES:
         range_name = '24h'
+    now = time.time() if now is None else now
     rows = history.rows(range_name, now=now)
     bucket_seconds = _CHART_BUCKETS[range_name]
+    series = history.series(since=now - _RANGES['30d'])
     return {
         'range': range_name,
         'bucket_seconds': bucket_seconds,
         'rows': _aggregate_rows(rows, bucket_seconds),
         'fields': _field_metadata(row['field'] for row in rows if row['field']),
+        'consumption': _consumption_payload(series, range_name, now=now, tz=tz),
+        'heatmap': _heatmap_payload(series, now=now, tz=tz),
     }
 
 
@@ -615,8 +658,8 @@ def _aggregate_rows(rows: list[dict[str, Any]], bucket_seconds: int) -> list[dic
         return rows
     kept: dict[tuple[str, str, int, int | None], dict[str, Any]] = {}
     for row in rows:
-        reset = _reset_timestamp(row['resets_at'])
-        cycle = None if reset is None else int(reset // _CYCLE_RESET_TOLERANCE)
+        reset = reset_timestamp(row['resets_at'])
+        cycle = None if reset is None else int(reset // CYCLE_RESET_TOLERANCE)
         key = (row['provider'], row['field'], int(row['ts'] // bucket_seconds), cycle)
         best = kept.get(key)
         higher = row['utilization'] is not None and (best is None or best['utilization'] is None or row['utilization'] >= best['utilization'])
@@ -640,11 +683,66 @@ def _field_metadata(fields: Iterable[str]) -> dict[str, dict[str, Any]]:
     return metadata
 
 
+def _consumption_payload(series: dict[str, dict[str, list[Sample]]], range_name: str, *, now: float, tz: tzinfo | None) -> dict[str, Any]:
+    """Points each provider used per local hour (last 24 hours) or day (last 7 or 30 days).
+
+    Usage is measured on each provider's longest base quota window, so work
+    that counts against several quotas is counted once.
+
+    Returns
+    -------
+    dict
+        ``unit`` (``'hour'`` or ``'day'``), ``starts`` (bucket start times,
+        oldest first) and ``providers``: ``id``, ``field``, ``label`` and
+        ``values`` (points per bucket).
+    """
+    unit, count = _CONSUMPTION_BUCKETS[range_name]
+    providers = []
+    for provider, fields in series.items():
+        field = consumption_field(fields)
+        if field is None:
+            continue
+        providers.append({
+            'id': provider,
+            'field': field,
+            'label': popup_label(field),
+            'values': consumption_buckets(fields[field], unit=unit, count=count, now=now, tz=tz),
+        })
+    return {'unit': unit, 'starts': bucket_starts(unit, count, now=now, tz=tz), 'providers': providers}
+
+
+def _heatmap_payload(series: dict[str, dict[str, list[Sample]]], *, now: float, tz: tzinfo | None) -> dict[str, Any]:
+    """Average points used per local weekday and hour over the last four weeks, per provider.
+
+    Returns
+    -------
+    dict
+        ``days`` (length of the period) and ``providers``: ``id``, ``field``,
+        ``label`` and ``cells`` (seven rows, Monday first, of 24 hourly averages).
+    """
+    providers = []
+    for provider, fields in series.items():
+        field = consumption_field(fields)
+        if field is None:
+            continue
+        providers.append({
+            'id': provider,
+            'field': field,
+            'label': popup_label(field),
+            'cells': heatmap_cells(fields[field], now=now, days=HEATMAP_DAYS, tz=tz),
+        })
+    return {'days': HEATMAP_DAYS, 'providers': providers}
+
+
 def _status_payload(app: AgentPulse) -> dict[str, Any]:
     """Build a token-free dashboard status payload."""
+    now = time.time()
     claude_snap = app.cache.snapshot
     settings = dashboard_settings()
-    series = _rows_by_series(app.dashboard.history.rows('30d'))
+    predictions = bool(settings.get('prediction_enabled', True))
+    day_end = next_local_time(str(settings.get('prediction_day_end_time', '18:00')), now=now) if predictions else None
+    series = app.dashboard.history.series(since=now - _RANGES['30d'])
+    context = _OutlookContext(now=now, day_end=day_end, predictions=predictions)
     return {
         'app': {'name': 'Agents Pulse', 'version': __version__},
         'privacy': {
@@ -652,9 +750,11 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
             'token_free': True,
             'analytics': False,
         },
+        'now': now,
+        'day_end': day_end,
         'next_poll_time': app.next_poll_time,
         'settings': {
-            'prediction_enabled': settings.get('prediction_enabled', True),
+            'prediction_enabled': predictions,
             'prediction_day_end_time': settings.get('prediction_day_end_time', '18:00'),
             'heatmap_enabled': settings.get('heatmap_enabled', True),
             'quiet_hours_enabled': settings.get('quiet_hours_enabled', False),
@@ -663,28 +763,29 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
         },
         'providers': [
             _provider_payload(
-                'claude', claude_snap, [{'name': i.name, 'version': i.version} for i in find_installations()], series,
+                'claude', claude_snap, [{'name': i.name, 'version': i.version} for i in find_installations()], series.get('claude', {}), context,
             ),
-            *_secondary_provider_payloads(app, series),
+            *_secondary_provider_payloads(app, series, context),
         ],
     }
 
 
-def _rows_by_series(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
-    """Group history rows by ``(provider, field)`` so each series is scanned once."""
-    series: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for row in rows:
-        series.setdefault((row['provider'], row['field']), []).append(row)
-    return series
+@dataclass(frozen=True)
+class _OutlookContext:
+    """What every provider's outlooks in one status payload share."""
+
+    now: float
+    day_end: float | None
+    predictions: bool
 
 
-def _secondary_provider_payloads(app: AgentPulse, series: dict[tuple[str, str], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _secondary_provider_payloads(app: AgentPulse, series: dict[str, dict[str, list[Sample]]], context: _OutlookContext) -> list[dict[str, Any]]:
     """Build the dashboard payload of every active non-Claude provider."""
     payloads = []
     for provider, cache in app.secondary_providers():
         version = SECONDARY_PROVIDERS_BY_NAME[provider].cli_version()
         installations = [{'name': 'CLI', 'version': version}] if version else []
-        payloads.append(_provider_payload(provider, cache.snapshot, installations, series))
+        payloads.append(_provider_payload(provider, cache.snapshot, installations, series.get(provider, {}), context))
     return payloads
 
 
@@ -692,16 +793,19 @@ def _provider_payload(
     provider: str,
     snap: Any,
     installations: list[dict[str, str]],
-    series: dict[tuple[str, str], list[dict[str, Any]]],
+    series: dict[str, list[Sample]],
+    context: _OutlookContext,
 ) -> dict[str, Any]:
-    now = time.time()
+    """Build one provider's card: every quota with its outlook and pace trend, in display order."""
+    outlooks = usage_outlooks(snap.usage, series, now=context.now, day_end=context.day_end, forecast=context.predictions)
     usage = []
-    for key, value in snap.usage.items():
-        if key == 'extra_usage':
-            continue
-        if not isinstance(value, dict) or value.get('utilization') is None:
+    for key in sorted(snap.usage, key=field_sort_key):
+        value = snap.usage[key]
+        if key == 'extra_usage' or not isinstance(value, dict) or value.get('utilization') is None:
             continue
         resets_at = value.get('resets_at', '') or ''
+        parsed = parse_field_name(key)
+        outlook = outlooks.get(key)
         usage.append({
             'field': key,
             'label': popup_label(key),
@@ -709,8 +813,9 @@ def _provider_payload(
             'resets_at': resets_at,
             'reset_text': time_until(resets_at) if resets_at else '',
             'period_seconds': field_period(key),
-            'burn': _burn_payload(float(value.get('utilization') or 0), resets_at, field_period(key)),
-            'trend': _series_trend(series.get((provider, key), []), key, now),
+            'variant': parsed[2] if parsed else None,
+            'outlook': asdict(outlook) if outlook is not None else None,
+            'trend': _series_trend(series.get(key, []), key, context.now) if context.predictions else None,
         })
 
     return {
@@ -725,20 +830,6 @@ def _provider_payload(
     }
 
 
-def _burn_payload(utilization: float, resets_at: str, period_seconds: int | None) -> dict[str, Any] | None:
-    from .formatting import burn_rate_info
-
-    info = burn_rate_info(utilization, resets_at, period_seconds)
-    if info is None:
-        return None
-    return {
-        'burn_per_hour': info['burn_per_hour'],
-        'eta_seconds': info['eta_seconds'],
-        'healthy': info['healthy'],
-        'pace_delta': info['pace_delta'],
-    }
-
-
 def _cycle_trend(history: DashboardHistory, provider: str, field: str, *, now: float | None = None) -> dict[str, Any] | None:
     """Compare the current quota cycle's pace against past cycles at the same age.
 
@@ -748,9 +839,9 @@ def _cycle_trend(history: DashboardHistory, provider: str, field: str, *, now: f
     a reset time - an idle session with no active window - belong to no
     cycle.  The current cycle's utilization is compared to what each previous
     cycle had reached at the same age.  This is the insight a single cycle's
-    burn rate can't give: whether *this* cycle is running ahead of or behind
-    the account's usual pace, as opposed to whether it is on pace to exhaust
-    the current window.
+    pace can't give: whether *this* cycle is running ahead of or behind the
+    account's usual pace, as opposed to whether it is on pace to exhaust the
+    current window.
 
     Parameters
     ----------
@@ -772,16 +863,16 @@ def _cycle_trend(history: DashboardHistory, provider: str, field: str, *, now: f
         and ``cycles_compared``.
     """
     now = time.time() if now is None else now
-    rows = [row for row in history.rows('30d', now=now) if row['provider'] == provider and row['field'] == field]
-    return _series_trend(rows, field, now)
+    samples = history.series(since=now - _RANGES['30d']).get(provider, {}).get(field, [])
+    return _series_trend(samples, field, now)
 
 
-def _series_trend(rows: list[dict[str, Any]], field: str, now: float) -> dict[str, Any] | None:
-    """Pace comparison for the history rows of one series; see :func:`_cycle_trend`."""
+def _series_trend(samples: list[Sample], field: str, now: float) -> dict[str, Any] | None:
+    """Pace comparison for the readings of one series; see :func:`_cycle_trend`."""
     period = field_period(field)
     if not period:
         return None
-    cycles = _quota_cycles(rows)
+    cycles = quota_cycles(samples)
     if len(cycles) < 2:
         return None
 
@@ -793,14 +884,14 @@ def _series_trend(rows: list[dict[str, Any]], field: str, now: float) -> dict[st
     comparable: list[float] = []
     for cycle in cycles[:-1]:
         start = cycle.reset - period
-        reached = [utilization for ts, utilization in cycle.samples if 0 <= ts - start <= age]
+        reached = [sample.utilization for sample in cycle.samples if 0 <= sample.ts - start <= age]
         if reached:
             comparable.append(reached[-1])
 
     if not comparable:
         return None
 
-    current_pct = current.samples[-1][1]
+    current_pct = current.samples[-1].utilization
     historical_avg_pct = sum(comparable) / len(comparable)
     return {
         'current_pct': current_pct,
@@ -808,38 +899,3 @@ def _series_trend(rows: list[dict[str, Any]], field: str, now: float) -> dict[st
         'delta_pct': current_pct - historical_avg_pct,
         'cycles_compared': len(comparable),
     }
-
-
-def _quota_cycles(rows: Iterable[dict[str, Any]]) -> list[_Cycle]:
-    """Split the history rows of one series into quota cycles, in time order.
-
-    A new cycle starts when the reported reset time moves by more than
-    ``_CYCLE_RESET_TOLERANCE`` from the previous sample's.  Samples without a
-    reset time belong to no cycle.  Each cycle keeps the latest reset time
-    it reported.
-    """
-    cycles: list[_Cycle] = []
-    previous: float | None = None
-    for row in sorted(rows, key=lambda item: item['ts']):
-        reset = _reset_timestamp(row['resets_at'])
-        if reset is None or row['utilization'] is None:
-            continue
-        if previous is None or abs(reset - previous) > _CYCLE_RESET_TOLERANCE:
-            cycles.append(_Cycle(reset=reset, samples=[]))
-        cycles[-1].reset = reset
-        cycles[-1].samples.append((row['ts'], row['utilization']))
-        previous = reset
-    return cycles
-
-
-def _reset_timestamp(value: object) -> float | None:
-    """Parse an ISO ``resets_at`` value to a Unix timestamp; None when absent, invalid or naive."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.timestamp()

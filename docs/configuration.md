@@ -95,7 +95,13 @@ Must be an array of non-empty strings. `"*"` may appear at most once. Duplicates
 
 ## Tray icon
 
-The tray icon displays a compact `AP` mark. Use `tooltip_fields` to choose which usage fields appear when hovering over the icon.
+The tray icon shows each provider's session usage - its shortest quota window, such as the 5-hour session - in the order of the popup's tabs. Usage turns orange at 80% and red at 95%. Use `tooltip_fields` to choose which usage fields appear when hovering over the icon.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `icon_style` | `"bars"` | `"bars"`: one vertical bar per provider, filled from the bottom. `"rings"`: one concentric ring per provider, the used share drawn clockwise from 12 o'clock; a ring at 95% or more turns solid red. `"number"`: the highest percentage as digits over its meter (`!` once a limit is reached). Also available in the dashboard's settings panel, where a change applies immediately |
+
+When every provider shown in the icon has reached a limit, the icon switches to a red countdown to the moment the first of them can be used again - minutes below an hour (`47`), then hours (`5h`) or days (`2d`). When that countdown ends, a green check mark shows for ten minutes.
 
 ## Event commands
 
@@ -143,11 +149,11 @@ Kimi's membership also has a monthly credit pool that can freeze Kimi Code once 
 
 ## Local dashboard
 
-Use **Open Dashboard** from the tray context menu to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard keeps a token-free ring buffer of usage snapshots for up to 30 days (or 40,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range. The 7-day and 30-day charts receive the history aggregated to the highest reading per 10 or 30 minutes, which keeps limit hits visible; the CSV export always contains every sample. The dashboard downloads history again only after a new reading arrives and pauses while its browser tab is in the background.
+Use **Open Dashboard** from the tray context menu or the popup's **Dashboard** button to start a browser dashboard on `http://127.0.0.1:8766`. The dashboard keeps a token-free ring buffer of usage snapshots for up to 30 days (or 60,000 provider snapshots, whichever is reached first). It exposes local-only JSON endpoints for the UI and a CSV export for the selected range. The 7-day and 30-day charts receive the history aggregated to the highest reading per 10 or 30 minutes, which keeps limit hits visible; the CSV export always contains every sample. The dashboard downloads history again only after a new reading arrives and pauses while its browser tab is in the background.
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** section can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
 
 History settings:
 
@@ -155,15 +161,22 @@ History settings:
 |-----|---------|-------------|
 | `history_persist` | `true` | Persist dashboard usage history to `agentpulse-history.jsonl` so it survives restarts. Set to `false` for in-memory history only |
 
-Burn-rate and ETA values are calculated locally from the current utilization, reset time, and period length. A healthy pace means the current utilization is at or below the percentage of time elapsed in that quota period.
+The dashboard opens with a one-line summary and a card per provider. Every quota shows its status, its usage with a lighter segment projecting it to the reset, and a marker for how much of the window has passed. Below them, usage history is drawn in one panel per window length (session, weekly) on a shared time axis: hover or focus the chart and use the arrow keys to read every series at one moment, toggle series in the legend, or open the data table for the highest reading per hour (last 24 hours) or per day. Consumption bars show the percentage points each provider used per hour or day, measured on its longest quota window so work that counts against several quotas is counted once, and the heatmap shows the average use per weekday and hour over the last four weeks.
+
+Forecasts are calculated locally from the usage history:
+
+- **Session windows** (measured in hours) are projected from their pace: 60% the change over the last half hour, 40% the window's average (counted over at least its first ten minutes).
+- **Multi-day windows** (weekly limits) follow your own rhythm: the median usage that past cycles added after the same point of their window, once history holds such cycles. Before that, the average pace over at least one full day is used, so a single working session is not extrapolated across nights and weekends.
+
+The status follows the forecast at the reset: **On track** below 90%, **Tight** from 90%, **Limit before reset** (or **Limit ~15:47** when a pace gives the time) at 100%, and **Limit reached** once a quota is used up. The popup, the tray tooltip, and the dashboard show the same status.
 
 Prediction and heatmap settings:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `prediction_enabled` | `true` | Show dashboard predictions for projected end-of-day and reset-period utilization |
-| `prediction_day_end_time` | `"18:00"` | Local HH:MM time used as the end-of-day prediction target |
-| `heatmap_enabled` | `true` | Show a dashboard heatmap of positive usage changes grouped by local hour |
+| `prediction_enabled` | `true` | Show forecasts: the projected usage at each reset in the dashboard and popup, and statuses such as **Tight** or **Limit ~15:47** in the dashboard, popup, and tooltip. When off, only a reached limit is flagged |
+| `prediction_day_end_time` | `"18:00"` | Local HH:MM end of your day: quotas that reset later also show their projected usage at this time in the dashboard (tomorrow's, once today's has passed) |
+| `heatmap_enabled` | `true` | Show the dashboard's weekday-by-hour heatmap |
 
 Quiet hours settings:
 
@@ -208,7 +221,8 @@ Override individual channels as RGBA arrays `[R, G, B, A]` (0-255). Unspecified 
 | `fg_heading` | `"#ffffff"` | Section headings |
 | `fg_link` | `"#4a9eff"` | Link text (e.g. changelog) |
 | `bar_bg` | `"#333333"` | Progress bar background |
-| `bar_fg` | `"#4a9eff"` | Progress bar fill |
-| `bar_fg_warn` | `"#e05050"` | Progress bar fill when usage outpaces elapsed time, error text |
+| `bar_fg` | `"#4a9eff"` | Progress bar fill while a quota is on track |
+| `bar_fg_tight` | `"#e8b339"` | Progress bar fill and status when a quota is projected to end within ten points of its limit |
+| `bar_fg_warn` | `"#e05050"` | Progress bar fill and status when a quota is projected to run out before it resets or has run out, error text |
 | `bar_divider` | `"#000c"` | Midnight divider on weekly progress bars |
 | `bar_marker` | `"#fffc"` | Time-position marker on progress bars |

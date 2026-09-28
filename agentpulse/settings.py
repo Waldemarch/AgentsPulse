@@ -11,17 +11,17 @@ from typing import Any
 
 __all__ = [
     'ALERT_TIME_AWARE', 'ALERT_TIME_AWARE_BELOW',
-    'BAR_BG', 'BAR_DIVIDER', 'BAR_FG', 'BAR_FG_WARN', 'BAR_MARKER', 'BG',
+    'BAR_BG', 'BAR_DIVIDER', 'BAR_FG', 'BAR_FG_TIGHT', 'BAR_FG_WARN', 'BAR_MARKER', 'BG',
     'CODEX_ENABLED', 'CURRENCY_SYMBOL',
     'DASHBOARD_HOST', 'DASHBOARD_PORT',
     'FG', 'FG_DIM', 'FG_HEADING', 'FG_LINK',
     'HEATMAP_ENABLED', 'HISTORY_FILENAME', 'HISTORY_PERSIST',
-    'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'IDLE_PAUSE',
+    'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'ICON_STYLE', 'ICON_STYLES', 'IDLE_PAUSE',
     'KIMI_ENABLED',
     'LANGUAGE', 'LEGACY_SETTINGS_FILENAMES', 'MAX_BACKOFF',
     'ON_RESET_COMMAND', 'ON_THRESHOLD_COMMAND',
     'POLL_ERROR', 'POLL_FAST', 'POLL_FAST_EXTRA', 'POLL_INTERVAL',
-    'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED', 'PROVIDER_LABELS',
+    'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED', 'PROVIDER_COLORS', 'PROVIDER_LABELS',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
     'SETTINGS_FILENAME', 'TOOLTIP_FIELDS',
     'dashboard_settings', 'get_alert_thresholds', 'history_write_path', 'reload', 'save_dashboard_settings', 'settings_write_path',
@@ -30,6 +30,10 @@ __all__ = [
 
 # Display names of the supported providers, in the order the UI presents them.
 PROVIDER_LABELS = {'claude': 'Claude', 'codex': 'Codex', 'kimi': 'Kimi'}
+# One colour per provider on dark backgrounds (popup), matching the dashboard's dark-theme palette.
+PROVIDER_COLORS = {'claude': '#3987e5', 'codex': '#199e70', 'kimi': '#d95926'}
+# Tray icon styles: one bar per provider, one ring per provider, or the highest percentage as a number.
+ICON_STYLES = ('bars', 'rings', 'number')
 
 SETTINGS_FILENAME = 'agentpulse-settings.json'
 LEGACY_SETTINGS_FILENAMES = ('usage-monitor-settings.json',)
@@ -43,7 +47,7 @@ _MIN_INTS = {
     'max_backoff': 1,
     'idle_pause': 0,
 }
-_COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
+_COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_tight', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
 _BOOLEANS = {'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'show_install_section'}
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
@@ -59,7 +63,7 @@ _DASHBOARD_KEYS = {
     'on_reset_command', 'on_threshold_command',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
-    'show_install_section', 'email_display',
+    'show_install_section', 'email_display', 'icon_style',
 }
 
 
@@ -177,6 +181,9 @@ def _validate(data: dict[str, Any], path: Path) -> dict[str, Any]:
         elif key == 'email_display':
             if value not in _EMAIL_DISPLAY_VALUES:
                 reject(key, f'expected one of {_EMAIL_DISPLAY_VALUES}')
+        elif key == 'icon_style':
+            if value not in ICON_STYLES:
+                reject(key, f'expected one of {ICON_STYLES}')
         elif key in _BOOLEANS:
             if not isinstance(value, bool):
                 reject(key, f'expected true or false, got {type(value).__name__}')
@@ -312,6 +319,11 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = value
             else:
                 errors.append(f'{key}: invalid value')
+        elif key == 'icon_style':
+            if value in ICON_STYLES:
+                accepted[key] = value
+            else:
+                errors.append(f'{key}: invalid value')
         else:
             errors.append(f'{key}: unsupported')
     return accepted, errors
@@ -337,6 +349,7 @@ def dashboard_settings() -> dict[str, object]:
         'quiet_hours_enabled': QUIET_HOURS_ENABLED,
         'quiet_hours_start': QUIET_HOURS_START,
         'quiet_hours_end': QUIET_HOURS_END,
+        'icon_style': ICON_STYLE,
     }
 
 
@@ -389,6 +402,7 @@ FG_HEADING = _S.get('fg_heading', '#ffffff')
 FG_LINK = _S.get('fg_link', '#4a9eff')
 BAR_BG = _S.get('bar_bg', '#333333')
 BAR_FG = _S.get('bar_fg', '#4a9eff')
+BAR_FG_TIGHT = _S.get('bar_fg_tight', '#e8b339')
 BAR_FG_WARN = _S.get('bar_fg_warn', '#e05050')
 BAR_DIVIDER = _S.get('bar_divider', '#000c')
 BAR_MARKER = _S.get('bar_marker', '#fffc')
@@ -405,6 +419,7 @@ ICON_DARK = _icon_colors('icon_dark', {
 })
 
 ICON_FIELDS = _S.get('icon_fields', ['five_hour', 'seven_day'])
+ICON_STYLE = _S.get('icon_style', 'bars')
 TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
 POPUP_FIELDS = _S.get('popup_fields', ['*'])
 ALERT_TIME_AWARE = _S.get('alert_time_aware', True)
@@ -465,7 +480,7 @@ def reload() -> None:
     global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
     global HEATMAP_ENABLED, CODEX_ENABLED, KIMI_ENABLED
-    global ICON_FIELDS, TOOLTIP_FIELDS
+    global ICON_FIELDS, ICON_STYLE, TOOLTIP_FIELDS
     global ALERT_TIME_AWARE, ALERT_TIME_AWARE_BELOW
     global SHOW_INSTALL_SECTION, EMAIL_DISPLAY
 
@@ -482,6 +497,7 @@ def reload() -> None:
     CODEX_ENABLED = _S.get('codex_enabled', True)
     KIMI_ENABLED = _S.get('kimi_enabled', True)
     ICON_FIELDS = _S.get('icon_fields', ['five_hour', 'seven_day'])
+    ICON_STYLE = _S.get('icon_style', 'bars')
     TOOLTIP_FIELDS = _S.get('tooltip_fields', ['five_hour', 'seven_day'])
     ALERT_TIME_AWARE = _S.get('alert_time_aware', True)
     ALERT_TIME_AWARE_BELOW = _S.get('alert_time_aware_below', 90)

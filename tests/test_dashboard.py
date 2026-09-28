@@ -20,6 +20,7 @@ from agentpulse.dashboard import (
     DashboardHistory, DashboardServer,
     _apply_autostart, _autostart_enabled, _cycle_trend, _dashboard_i18n, _history_payload, _needs_restart, _status_payload,
 )
+from agentpulse.forecast import Sample, next_local_time
 from agentpulse.providers import SECONDARY_PROVIDERS_BY_NAME
 
 _DASHBOARD_JS = Path(__file__).resolve().parent.parent / 'agentpulse' / 'dashboard' / 'dashboard.js'
@@ -418,6 +419,209 @@ class TestHistoryPayload(unittest.TestCase):
         self.assertEqual(len(lines), 11)  # header plus every reading
 
 
+class TestHistorySeries(unittest.TestCase):
+    """Tests for DashboardHistory.series() - readings grouped for the forecasts."""
+
+    def test_groups_readings_by_provider_and_field(self):
+        history = DashboardHistory()
+        reset = '2033-05-18T03:33:20+00:00'
+        history.record('claude', {'five_hour': {'utilization': 5, 'resets_at': reset}, 'seven_day': {'utilization': 9, 'resets_at': ''}}, ts=100)
+        history.record('kimi', {'five_hour': {'utilization': 7, 'resets_at': reset}}, ts=200)
+
+        series = history.series()
+
+        self.assertEqual(sorted(series), ['claude', 'kimi'])
+        self.assertEqual(series['claude']['five_hour'][0], Sample(100, 5.0, 2_000_000_000.0))
+        self.assertIsNone(series['claude']['seven_day'][0].reset)
+
+    def test_since_leaves_out_older_readings(self):
+        history = DashboardHistory()
+        for ts in (100, 200, 300):
+            history.record('claude', {'five_hour': {'utilization': ts / 10, 'resets_at': ''}}, ts=ts)
+
+        samples = history.series(since=200)['claude']['five_hour']
+
+        self.assertEqual([sample.ts for sample in samples], [200, 300])
+
+    def test_error_only_provider_has_no_fields(self):
+        history = DashboardHistory()
+        history.record('codex', {'error': 'failed'}, ts=100)
+
+        self.assertEqual(history.series(), {'codex': {}})
+
+
+class TestUsageStatisticsPayload(unittest.TestCase):
+    """Tests for the consumption bars and heatmap in _history_payload()."""
+
+    TZ = timezone.utc
+    NOW = datetime(2026, 1, 14, 12, 30, tzinfo=timezone.utc).timestamp()
+
+    def _history(self):
+        history = DashboardHistory()
+        reset = datetime(2026, 1, 17, 12, 0, tzinfo=timezone.utc).isoformat()
+        session = datetime(2026, 1, 14, 15, 0, tzinfo=timezone.utc).isoformat()
+        readings = [(-26, 10.0, 1.0), (-25, 12.0, 4.0), (-2, 20.0, 6.0), (-1, 25.0, 40.0)]
+        for hours, weekly, five in readings:
+            history.record('claude', {
+                'seven_day': {'utilization': weekly, 'resets_at': reset},
+                'seven_day_sonnet': {'utilization': weekly / 2, 'resets_at': reset},
+                'five_hour': {'utilization': five, 'resets_at': session},
+            }, ts=self.NOW + hours * 3600)
+        return history
+
+    def test_daily_consumption_counts_the_longest_base_window_once(self):
+        consumption = _history_payload(self._history(), '7d', now=self.NOW, tz=self.TZ)['consumption']
+
+        self.assertEqual(consumption['unit'], 'day')
+        self.assertEqual(len(consumption['starts']), 7)
+        claude = consumption['providers'][0]
+        self.assertEqual((claude['id'], claude['field']), ('claude', 'seven_day'))
+        self.assertTrue(claude['label'])
+        # 2 points yesterday, 8 + 5 today; the variant and the session window add nothing.
+        self.assertEqual(claude['values'][-2:], [2.0, 13.0])
+        self.assertEqual(sum(claude['values']), 15.0)
+
+    def test_day_view_counts_hours(self):
+        consumption = _history_payload(self._history(), '24h', now=self.NOW, tz=self.TZ)['consumption']
+
+        self.assertEqual(consumption['unit'], 'hour')
+        self.assertEqual(len(consumption['starts']), 24)
+        self.assertEqual(consumption['starts'][-1], datetime(2026, 1, 14, 12, 0, tzinfo=timezone.utc).timestamp())
+
+    def test_month_view_counts_thirty_days(self):
+        consumption = _history_payload(self._history(), '30d', now=self.NOW, tz=self.TZ)['consumption']
+
+        self.assertEqual((consumption['unit'], len(consumption['starts'])), ('day', 30))
+
+    def test_heatmap_is_seven_days_of_twenty_four_hours(self):
+        heatmap = _history_payload(self._history(), '24h', now=self.NOW, tz=self.TZ)['heatmap']
+
+        self.assertEqual(heatmap['days'], 28)
+        cells = heatmap['providers'][0]['cells']
+        self.assertEqual((len(cells), {len(row) for row in cells}), (7, {24}))
+        # Wednesday (row 2) 10:00-11:00 and 11:00-12:00 hold today's growth.
+        self.assertEqual(cells[2][10], 8.0)
+        self.assertEqual(cells[2][11], 5.0)
+
+    def test_providers_without_readings_are_left_out(self):
+        history = DashboardHistory()
+        history.record('codex', {'error': 'failed'}, ts=self.NOW - 60)
+
+        payload = _history_payload(history, '7d', now=self.NOW, tz=self.TZ)
+
+        self.assertEqual(payload['consumption']['providers'], [])
+        self.assertEqual(payload['heatmap']['providers'], [])
+        self.assertEqual(len(payload['consumption']['starts']), 7)
+
+
+class TestStatusOutlooks(unittest.TestCase):
+    """Tests for the outlook of every quota in _status_payload()."""
+
+    def _app(self, usage, history=None):
+        snap = MagicMock()
+        snap.usage = usage
+        snap.last_success_time = 1000
+        snap.refreshing = False
+        snap.last_error = None
+        app = MagicMock()
+        app.cache.snapshot = snap
+        app.secondary_providers.return_value = []
+        app.next_poll_time = None
+        app.dashboard.history = history or DashboardHistory()
+        return app
+
+    def _iso(self, hours):
+        return datetime.fromtimestamp(time.time() + hours * 3600, tz=timezone.utc).isoformat()
+
+    def _payload(self, app, **settings):
+        values = {'prediction_enabled': True, 'prediction_day_end_time': '18:00', 'heatmap_enabled': True}
+        values.update(settings)
+        with patch('agentpulse.dashboard.find_installations', return_value=[]), \
+             patch('agentpulse.dashboard.dashboard_settings', return_value=values):
+            return _status_payload(app)
+
+    def test_each_quota_carries_its_outlook(self):
+        app = self._app({'five_hour': {'utilization': 100.0, 'resets_at': self._iso(1)}})
+
+        entry = self._payload(app)['providers'][0]['usage'][0]
+
+        self.assertEqual(entry['outlook']['status'], 'blocked')
+        self.assertIsNone(entry['variant'])
+
+    def test_quota_without_reset_time_has_no_outlook(self):
+        app = self._app({'five_hour': {'utilization': 20.0, 'resets_at': ''}})
+
+        self.assertIsNone(self._payload(app)['providers'][0]['usage'][0]['outlook'])
+
+    def test_quotas_are_listed_sessions_first(self):
+        app = self._app({
+            'seven_day_sonnet': {'utilization': 2.0, 'resets_at': self._iso(30)},
+            'seven_day': {'utilization': 20.0, 'resets_at': self._iso(30)},
+            'five_hour': {'utilization': 5.0, 'resets_at': self._iso(3)},
+        })
+
+        usage = self._payload(app)['providers'][0]['usage']
+
+        self.assertEqual([entry['field'] for entry in usage], ['five_hour', 'seven_day', 'seven_day_sonnet'])
+        self.assertEqual(usage[2]['variant'], 'sonnet')
+
+    def test_history_shapes_the_outlook(self):
+        usage = {'five_hour': {'utilization': 60.0, 'resets_at': self._iso(2.5)}}
+        history = DashboardHistory()
+        self.assertEqual(self._payload(self._app(usage, history))['providers'][0]['usage'][0]['outlook']['status'], 'limit')
+
+        history.record('claude', usage, ts=time.time() - 25 * 60)
+
+        self.assertEqual(self._payload(self._app(usage, history))['providers'][0]['usage'][0]['outlook']['status'], 'ok')
+
+    def test_day_end_projection_before_a_later_reset(self):
+        app = self._app({'seven_day': {'utilization': 30.0, 'resets_at': self._iso(80)}})
+        end = datetime.fromtimestamp(time.time() + 3600).strftime('%H:%M')
+
+        outlook = self._payload(app, prediction_day_end_time=end)['providers'][0]['usage'][0]['outlook']
+
+        self.assertIsNotNone(outlook['day_end_pct'])
+        self.assertLessEqual(outlook['day_end_pct'], outlook['forecast_pct'])
+
+    def test_day_end_is_the_next_target_time(self):
+        payload = self._payload(self._app({}), prediction_day_end_time='18:00')
+
+        self.assertEqual(payload['day_end'], next_local_time('18:00', now=payload['now']))
+        self.assertGreater(payload['day_end'], payload['now'])
+        self.assertLessEqual(payload['day_end'] - payload['now'], 24 * 3600)
+
+    def test_day_end_that_already_passed_moves_a_day_ahead(self):
+        passed = datetime.fromtimestamp(time.time() - 3600).strftime('%H:%M')
+
+        payload = self._payload(self._app({}), prediction_day_end_time=passed)
+
+        self.assertGreater(payload['day_end'] - payload['now'], 12 * 3600)
+
+    def test_predictions_off_has_no_day_end(self):
+        self.assertIsNone(self._payload(self._app({}), prediction_enabled=False)['day_end'])
+
+    def test_predictions_off_leaves_only_reached_limits(self):
+        app = self._app({
+            'five_hour': {'utilization': 95.0, 'resets_at': self._iso(1)},
+            'seven_day': {'utilization': 100.0, 'resets_at': self._iso(30)},
+        })
+
+        payload = self._payload(app, prediction_enabled=False)
+        usage = payload['providers'][0]['usage']
+
+        self.assertFalse(payload['settings']['prediction_enabled'])
+        self.assertEqual([entry['outlook']['status'] for entry in usage], ['ok', 'blocked'])
+        self.assertIsNone(usage[0]['outlook']['forecast_pct'])
+        self.assertIsNone(usage[0]['trend'])
+
+    def test_payload_reports_the_server_time(self):
+        before = time.time()
+
+        payload = self._payload(self._app({}))
+
+        self.assertGreaterEqual(payload['now'], before)
+
+
 class TestNeedsRestart(unittest.TestCase):
     STARTUP = {'codex_enabled': True, 'kimi_enabled': True}
 
@@ -566,6 +770,18 @@ class TestSettingsEndpoint(unittest.TestCase):
 
         self.assertFalse(result['ok'])
         self.assertFalse(result['restart_required'])
+
+    def test_successful_save_applies_the_settings_to_the_tray(self):
+        with patch('agentpulse.dashboard.save_dashboard_settings', return_value=(True, [], Path('settings.json'))):
+            self._post_json('/api/settings', {'icon_style': 'rings'})
+
+        self.server.app.apply_settings.assert_called_once_with()
+
+    def test_failed_save_leaves_the_tray_alone(self):
+        with patch('agentpulse.dashboard.save_dashboard_settings', return_value=(False, ['icon_style: invalid value'], Path('settings.json'))):
+            self._post_json('/api/settings', {'icon_style': 'sparkles'})
+
+        self.server.app.apply_settings.assert_not_called()
 
     def test_post_settings_reports_invalid_autostart_value(self):
         fake = _fake_autostart_module()
@@ -789,7 +1005,25 @@ class TestDashboardI18n(unittest.TestCase):
 
         self.assertIn('save_settings', strings)
         self.assertIn('autostart', strings)
-        self.assertIn('pace_healthy', strings)
+        for key in ('status_ok', 'status_tight', 'status_limit', 'status_limit_at', 'status_blocked', 'forecast_at_reset'):
+            self.assertIn(key, strings)
+
+    def test_weekdays_are_sent_monday_first(self):
+        from agentpulse.i18n import T
+
+        strings = _dashboard_i18n()
+
+        self.assertEqual([strings[f'weekday_{index}'] for index in range(7)], T['weekdays'])
+
+    def test_every_key_the_dashboard_script_asks_for_is_sent(self):
+        """Each tr('key') and data-i18n key in the dashboard has a translation, apart from dynamic prefixes."""
+        strings = _dashboard_i18n()
+        script = _DASHBOARD_JS.read_text(encoding='utf-8')
+        markup = (_DASHBOARD_JS.parent / 'index.html').read_text(encoding='utf-8')
+        wanted = set(re.findall(r"tr\('([a-z0-9_]+)'", script))
+        wanted |= set(re.findall(r'data-i18n(?:-label)?="([a-z0-9_]+)"', markup))
+
+        self.assertEqual(sorted(wanted - set(strings)), [])
 
     def test_exposes_every_provider_settings_key(self):
         """Each provider's dashboard controls have a translated label."""

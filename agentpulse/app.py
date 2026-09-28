@@ -21,7 +21,8 @@ from .codex_api import read_access_token as read_codex_access_token
 from .codex_cache import CodexCache
 from .command import run_event_command
 from .dashboard import DashboardServer
-from .formatting import elapsed_pct, field_period, format_credits, format_tooltip, parse_field_name, popup_label
+from .forecast import Outlook, blocked_until, usage_outlooks
+from .formatting import countdown_label, elapsed_pct, field_period, format_credits, format_tooltip, parse_field_name, popup_label
 from .i18n import T
 from .idle import get_idle_seconds, is_workstation_locked
 from .kimi_api import read_access_token as read_kimi_access_token
@@ -33,9 +34,17 @@ from .settings import (
     KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
     get_alert_thresholds,
 )
-from .tray_icon import create_icon_image, create_status_image, taskbar_uses_light_theme, watch_theme_change
+from .tray_icon import (
+    create_countdown_image, create_icon_image, create_ready_image, create_status_image,
+    taskbar_uses_light_theme, watch_theme_change,
+)
 
 __all__ = ['AgentPulse', 'UsageMonitorForClaude', 'crash_log']
+
+# How long the tray shows its check mark after a countdown ends because a limit reset.
+_READY_SECONDS = 10 * 60
+# History the quota outlooks compare against: the dashboard keeps 30 days.
+_OUTLOOK_HISTORY_SECONDS = 30 * 24 * 3600
 
 
 def _future_iso(**delta: float) -> str:
@@ -110,6 +119,10 @@ class AgentPulse:
         self._fast_polls_remaining = 0
         self._idle_reset_pending = False
         self._next_poll_time: float | None = None
+        self._icon_key: tuple[Any, ...] | None = None
+        self._countdown_shown = False
+        self._ready_until = 0.0
+        self._refresh_lock = threading.Lock()
 
         self._popup_lock = threading.Lock()
         self._popup_open = False
@@ -118,7 +131,7 @@ class AgentPulse:
 
         self.icon = pystray.Icon(
             'usage_monitor',
-            icon=create_icon_image([0, 0], self._light_taskbar),
+            icon=create_icon_image([0], self._light_taskbar, _settings.ICON_STYLE),
             title=T['loading'],
             menu=self._menu(),
         )
@@ -275,20 +288,87 @@ class AgentPulse:
     def _render_tray(self) -> None:
         data = self._last_response
         sections = self._secondary_tooltip_sections()
-        available = [entry for _name, entry in sections if 'error' not in entry]
-        if 'error' in data and not available:
-            self.icon.icon = create_status_image('C!' if data.get('auth_error') else '!', self._light_taskbar)
-            self.icon.title = format_tooltip(data, sections)
+        self._refresh_icon(time.time())
+        self.icon.title = format_tooltip(data, sections, self.quota_outlooks())
+
+    def _refresh_icon(self, now: float) -> None:
+        """Redraw the tray icon when what it shows has changed."""
+        key = self._icon_state(now)
+        if key == self._icon_key:
             return
+        self._icon_key = key
+        kind = key[0]
+        if kind == 'status':
+            self.icon.icon = create_status_image(key[1], self._light_taskbar)
+        elif kind == 'countdown':
+            self.icon.icon = create_countdown_image(key[1])
+        elif kind == 'ready':
+            self.icon.icon = create_ready_image()
+        else:
+            self.icon.icon = create_icon_image(list(key[1]), light_taskbar=self._light_taskbar, style=key[2])
 
-        # One ring per provider that has data; providers without a session are
-        # left out so the icon keeps its single- or double-ring geometry.
-        percentages = [self._provider_entry(data, 'five_hour').get('utilization', 0) or 0]
-        for entry in available:
-            percentages.append(self._provider_entry(entry, 'five_hour').get('utilization', 0) or 0)
+    def _icon_state(self, now: float) -> tuple[Any, ...]:
+        """Decide what the tray icon shows now.
 
-        self.icon.icon = create_icon_image(percentages, light_taskbar=self._light_taskbar)
-        self.icon.title = format_tooltip(data, sections)
+        An error mark when no provider has data; a countdown while every
+        provider in the icon is at its limit; a check mark for a while after
+        such a countdown ends; otherwise each provider's session usage in the
+        configured icon style.
+        """
+        data = self._last_response
+        available = [entry for _name, entry in self._secondary_tooltip_sections() if 'error' not in entry]
+        if 'error' in data and not available:
+            return ('status', 'C!' if data.get('auth_error') else '!', self._light_taskbar)
+
+        usages = [data, *available]
+        until = _usable_again(usages, now)
+        if until is not None:
+            self._countdown_shown = True
+            return ('countdown', countdown_label(until - now))
+        if self._countdown_shown:
+            self._countdown_shown = False
+            self._ready_until = now + _READY_SECONDS
+        if now < self._ready_until:
+            return ('ready',)
+        return ('usage', tuple(_session_utilization(usage) for usage in usages), _settings.ICON_STYLE, self._light_taskbar)
+
+    def quota_outlooks(self) -> dict[str, dict[str, Outlook]]:
+        """Return the outlook of every quota of every active provider, keyed by provider and field.
+
+        Public: the popup uses the same outlooks as the tooltip.
+        """
+        now = time.time()
+        series = self.dashboard.history.series(since=now - _OUTLOOK_HISTORY_SECONDS)
+        providers = [('claude', self.cache.snapshot), *((name, cache.snapshot) for name, cache in self.secondary_providers())]
+        outlooks: dict[str, dict[str, Outlook]] = {}
+        for name, snapshot in providers:
+            outlooks[name] = usage_outlooks(snapshot.usage, series.get(name, {}), now=now, forecast=_settings.PREDICTION_ENABLED)
+        return outlooks
+
+    def refresh_now(self) -> None:
+        """Fetch fresh usage of every provider in the background.
+
+        Public: the popup's Refresh button calls this.  A provider updated less
+        than ``poll_fast`` seconds ago keeps its data (the caches' cooldown), so
+        repeated clicks cannot flood the APIs.
+        """
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+        threading.Thread(target=self._refresh_in_background, daemon=True).start()
+
+    def _refresh_in_background(self) -> None:
+        try:
+            self.update()
+        finally:
+            self._refresh_lock.release()
+
+    def apply_settings(self) -> None:
+        """Show settings saved from the dashboard right away, such as the icon style and tooltip fields.
+
+        Public: the dashboard calls this after a successful save.
+        """
+        if self._last_response:
+            self._render_tray()
 
     def _on_theme_changed(self) -> None:
         light = taskbar_uses_light_theme()
@@ -556,6 +636,9 @@ class AgentPulse:
             self._next_poll_time = target
             while self.running and time.time() < target:
                 time.sleep(1)
+                # Keeps a countdown icon ticking and ends the check mark on time.
+                if self._icon_key is not None:
+                    self._refresh_icon(time.time())
                 last_success = self.cache.last_success_time
                 if last_success is not None and last_success + interval > target:
                     target = last_success + interval
@@ -595,6 +678,36 @@ class AgentPulse:
 
     def run(self) -> None:
         self.icon.run(setup=self._on_icon_ready)
+
+
+def _usable_again(usages: list[dict[str, Any]], now: float) -> float | None:
+    """Unix time the first of these providers can be used again, or None unless all are at a limit."""
+    moments = []
+    for usage in usages:
+        until = blocked_until(usage, now=now)
+        if until is None:
+            return None
+        moments.append(until)
+    return min(moments) if moments else None
+
+
+def _session_utilization(usage: dict[str, Any]) -> float:
+    """Utilization of the provider's shortest base quota window (its session), or 0 without a value.
+
+    The shortest window is chosen among every field the response names, even
+    a null one, so an idle session shows 0 % instead of the weekly usage.
+    """
+    shortest: tuple[int, Any] | None = None
+    for key, value in usage.items():
+        parsed = parse_field_name(key)
+        period = field_period(key)
+        if parsed is None or parsed[2] is not None or not period:
+            continue
+        if shortest is None or period < shortest[0]:
+            shortest = (period, value)
+    if shortest is None or not isinstance(shortest[1], dict) or shortest[1].get('utilization') is None:
+        return 0.0
+    return float(shortest[1]['utilization'])
 
 
 UsageMonitorForClaude = AgentPulse

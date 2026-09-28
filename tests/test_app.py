@@ -7,6 +7,8 @@ tray rendering, polling interval, and reset notifications.
 """
 from __future__ import annotations
 
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -14,10 +16,17 @@ from unittest.mock import MagicMock, patch
 from agentpulse.app import AgentPulse, _is_quiet_time
 from agentpulse.cache import UpdateResult
 from agentpulse.claude_cli import RefreshResult
+from agentpulse.dashboard import DashboardHistory
 
 
 def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
     """Create an AgentPulse app with mocked icon and configurable thresholds.
+
+    Idle and lock detection report an active, unlocked session instead of the
+    state of the machine running the tests, so alerts are not deferred on a
+    runner that has had no keyboard input for a while. Tests of the away state
+    patch these probes themselves.  Usage history stays in memory, so readings
+    of one test never reach the forecasts of another or a file on disk.
 
     Parameters
     ----------
@@ -33,13 +42,20 @@ def _make_app(thresholds: list[float] | None = None) -> AgentPulse:
          patch('agentpulse.app.taskbar_uses_light_theme', return_value=False):
         app = AgentPulse()
     app.icon = MagicMock()
+    app.dashboard.history = DashboardHistory()
     app._thresholds_patch = patch('agentpulse.app.get_alert_thresholds', return_value=thresholds)
     app._thresholds_patch.start()
+    app._idle_patch = patch('agentpulse.app.get_idle_seconds', return_value=0.0)
+    app._idle_patch.start()
+    app._locked_patch = patch('agentpulse.app.is_workstation_locked', return_value=False)
+    app._locked_patch.start()
     return app
 
 
 def _cleanup(app: AgentPulse) -> None:
     """Stop patches started by _make_app."""
+    app._locked_patch.stop()
+    app._idle_patch.stop()
     app._thresholds_patch.stop()
 
 
@@ -991,7 +1007,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day': {'utilization': 10.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([42.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False, style='bars')
         self.assertEqual(self.app.icon.title, 'Usage: 42%')
 
     @patch('agentpulse.app.format_tooltip', return_value='Error')
@@ -1019,7 +1035,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {}, 'seven_day': {'utilization': None}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([0], light_taskbar=False)
+        mock_icon.assert_called_once_with([0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1032,17 +1048,35 @@ class TestRenderTray(unittest.TestCase):
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([30.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([30.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
     @patch('agentpulse.settings.ICON_FIELDS', ['unknown_field', 'five_hour'])
-    def test_five_hour_missing_from_response_defaults_to_zero(self, mock_icon, _tooltip):
-        """Missing five-hour usage defaults to 0%."""
-        self.app._last_response = {'seven_day': {'utilization': 42.0}}
+    def test_response_without_a_session_shows_its_shortest_window(self, mock_icon, _tooltip):
+        """A provider reporting no hour-based window shows its shortest window instead."""
+        self.app._last_response = {'seven_day': {'utilization': 42.0}, 'seven_day_opus': {'utilization': 90.0}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([0], light_taskbar=False)
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False, style='bars')
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    def test_null_session_shows_zero_instead_of_a_longer_window(self, mock_icon, _tooltip):
+        """An idle session reported as null keeps its slot at 0% rather than falling back to the weekly usage."""
+        self.app._last_response = {'five_hour': None, 'seven_day': {'utilization': 42.0}}
+        self.app._render_tray()
+
+        mock_icon.assert_called_once_with([0.0], light_taskbar=False, style='bars')
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    def test_session_window_is_found_by_its_length(self, mock_icon, _tooltip):
+        """A provider with a two-hour window shows that window, whatever it is called."""
+        self.app._last_response = {'two_hour': {'utilization': 33.0}, 'seven_day': {'utilization': 42.0}}
+        self.app._render_tray()
+
+        mock_icon.assert_called_once_with([33.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1052,7 +1086,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._last_response = {'five_hour': {'utilization': 42.0}, 'seven_day_sonnet': None}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([42.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1063,7 +1097,7 @@ class TestRenderTray(unittest.TestCase):
         self.app._secondary_responses = {'codex': {'five_hour': {'utilization': 70.0}}}
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([55.0, 70.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([55.0, 70.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1078,7 +1112,7 @@ class TestRenderTray(unittest.TestCase):
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([55.0, 70.0, 12.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([55.0, 70.0, 12.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_icon_image')
@@ -1093,7 +1127,7 @@ class TestRenderTray(unittest.TestCase):
         }
         self.app._render_tray()
 
-        mock_icon.assert_called_once_with([55.0, 12.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([55.0, 12.0], light_taskbar=False, style='bars')
 
     @patch('agentpulse.app.format_tooltip', return_value='tooltip')
     @patch('agentpulse.app.create_status_image')
@@ -1106,7 +1140,7 @@ class TestRenderTray(unittest.TestCase):
             self.app._render_tray()
 
         mock_status.assert_not_called()
-        mock_icon.assert_called_once_with([0, 12.0], light_taskbar=False)
+        mock_icon.assert_called_once_with([0, 12.0], light_taskbar=False, style='bars')
 
 
 # ---------------------------------------------------------------------------
@@ -1133,7 +1167,7 @@ class TestOnThemeChanged(unittest.TestCase):
         self.app._on_theme_changed()
 
         self.assertTrue(self.app._light_taskbar)
-        mock_icon.assert_called_once_with([50.0], light_taskbar=True)
+        mock_icon.assert_called_once_with([50.0], light_taskbar=True, style='bars')
 
     @patch('agentpulse.app.taskbar_uses_light_theme', return_value=False)
     def test_same_theme_no_render(self, _theme):
@@ -1154,6 +1188,260 @@ class TestOnThemeChanged(unittest.TestCase):
         with patch.object(self.app, '_render_tray') as mock_render:
             self.app._on_theme_changed()
             mock_render.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tray icon states: style, countdown, check mark
+# ---------------------------------------------------------------------------
+
+class TestTrayIconStates(unittest.TestCase):
+    """Tests for the icon style, the countdown while every provider is blocked, and the check mark after it."""
+
+    # 29.5 minutes: far from a minute boundary, so the countdown shows 30 whatever the clock's microseconds.
+    HALF_HOUR = 29.5 / 60
+
+    def setUp(self):
+        self.app = _make_app()
+        self.now = time.time()
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _usage(self, pct: float, hours: float) -> dict:
+        reset = datetime.fromtimestamp(self.now + hours * 3600, tz=timezone.utc).isoformat()
+        return {'five_hour': {'utilization': pct, 'resets_at': reset}}
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    @patch('agentpulse.settings.ICON_STYLE', 'rings')
+    def test_icon_style_comes_from_the_settings(self, mock_icon, _tooltip):
+        self.app._last_response = {'five_hour': {'utilization': 42.0}}
+        self.app._render_tray()
+
+        mock_icon.assert_called_once_with([42.0], light_taskbar=False, style='rings')
+
+    @patch('agentpulse.app.create_countdown_image')
+    @patch('agentpulse.app.create_icon_image')
+    def test_countdown_while_every_provider_is_at_its_limit(self, mock_icon, mock_countdown):
+        """The countdown runs to the first provider that is usable again."""
+        self.app.kimi_cache = MagicMock()
+        self.app._last_response = self._usage(100.0, self.HALF_HOUR)
+        self.app._secondary_responses = {'kimi': self._usage(100.0, 2)}
+
+        self.app._refresh_icon(self.now)
+
+        mock_countdown.assert_called_once_with('30')
+        mock_icon.assert_not_called()
+
+    @patch('agentpulse.app.create_countdown_image')
+    @patch('agentpulse.app.create_icon_image')
+    def test_no_countdown_while_another_provider_is_usable(self, mock_icon, mock_countdown):
+        self.app.kimi_cache = MagicMock()
+        self.app._last_response = self._usage(100.0, self.HALF_HOUR)
+        self.app._secondary_responses = {'kimi': self._usage(40.0, 2)}
+
+        self.app._refresh_icon(self.now)
+
+        mock_countdown.assert_not_called()
+        mock_icon.assert_called_once_with([100.0, 40.0], light_taskbar=False, style='bars')
+
+    @patch('agentpulse.app.create_countdown_image')
+    def test_countdown_redraws_once_a_minute(self, mock_countdown):
+        self.app._last_response = self._usage(100.0, self.HALF_HOUR)
+
+        self.app._refresh_icon(self.now)
+        self.app._refresh_icon(self.now + 10)
+        self.app._refresh_icon(self.now + 61)
+
+        self.assertEqual([call.args[0] for call in mock_countdown.call_args_list], ['30', '29'])
+
+    @patch('agentpulse.app.create_ready_image')
+    @patch('agentpulse.app.create_countdown_image')
+    @patch('agentpulse.app.create_icon_image')
+    def test_check_mark_after_the_countdown_ends(self, mock_icon, _countdown, mock_ready):
+        """At the reset the check mark replaces the countdown, before the next reading arrives."""
+        self.app._last_response = self._usage(100.0, self.HALF_HOUR)
+        self.app._refresh_icon(self.now)
+
+        self.app._refresh_icon(self.now + 1771)
+
+        mock_ready.assert_called_once_with()
+        mock_icon.assert_not_called()
+
+    @patch('agentpulse.app.create_ready_image')
+    @patch('agentpulse.app.create_countdown_image')
+    @patch('agentpulse.app.create_icon_image')
+    def test_check_mark_gives_way_to_usage_after_ten_minutes(self, mock_icon, _countdown, mock_ready):
+        self.app._last_response = self._usage(100.0, self.HALF_HOUR)
+        self.app._refresh_icon(self.now)
+        self.app._refresh_icon(self.now + 1771)
+        self.app._last_response = self._usage(3.0, 5)
+
+        self.app._refresh_icon(self.now + 1771 + 599)
+        mock_icon.assert_not_called()
+        self.app._refresh_icon(self.now + 1771 + 601)
+
+        mock_ready.assert_called_once_with()
+        mock_icon.assert_called_once_with([3.0], light_taskbar=False, style='bars')
+
+    @patch('agentpulse.app.create_ready_image')
+    @patch('agentpulse.app.create_icon_image')
+    def test_no_check_mark_without_a_countdown(self, mock_icon, mock_ready):
+        """A quota that resets without having blocked every provider shows no check mark."""
+        self.app._last_response = self._usage(97.0, 0.5)
+        self.app._refresh_icon(self.now)
+        self.app._last_response = self._usage(0.0, 5)
+
+        self.app._refresh_icon(self.now + 1771)
+
+        mock_ready.assert_not_called()
+        self.assertEqual(mock_icon.call_count, 2)
+
+    @patch('agentpulse.app.create_icon_image')
+    def test_unchanged_icon_is_not_redrawn(self, mock_icon):
+        self.app._last_response = {'five_hour': {'utilization': 42.0}}
+
+        self.app._refresh_icon(self.now)
+        self.app._refresh_icon(self.now + 1)
+
+        mock_icon.assert_called_once()
+
+    @patch('agentpulse.app.create_status_image')
+    @patch('agentpulse.app.create_countdown_image')
+    def test_error_mark_wins_over_a_countdown(self, mock_countdown, mock_status):
+        self.app._last_response = {'error': 'server down'}
+
+        self.app._refresh_icon(self.now)
+
+        mock_status.assert_called_once_with('!', False)
+        mock_countdown.assert_not_called()
+
+    @patch('agentpulse.app.format_tooltip', return_value='tooltip')
+    @patch('agentpulse.app.create_icon_image')
+    def test_apply_settings_redraws_with_the_saved_style(self, mock_icon, _tooltip):
+        self.app._last_response = {'five_hour': {'utilization': 42.0}}
+        self.app._render_tray()
+
+        with patch('agentpulse.settings.ICON_STYLE', 'number'):
+            self.app.apply_settings()
+
+        self.assertEqual(mock_icon.call_count, 2)
+        self.assertEqual(mock_icon.call_args.kwargs['style'], 'number')
+
+    def test_apply_settings_without_data_draws_nothing(self):
+        with patch.object(self.app, '_render_tray') as mock_render:
+            self.app.apply_settings()
+
+        mock_render.assert_not_called()
+
+    @patch('agentpulse.app.create_icon_image')
+    def test_tooltip_gets_the_quota_outlooks(self, _icon):
+        """The tooltip's status texts come from the same outlooks as the popup's."""
+        self.app.cache = MagicMock()
+        self.app.cache.snapshot.usage = self._usage(100.0, 1)
+        self.app._last_response = self._usage(100.0, 1)
+
+        with patch('agentpulse.app.format_tooltip', return_value='tooltip') as mock_tooltip:
+            self.app._render_tray()
+
+        outlooks = mock_tooltip.call_args.args[2]
+        self.assertEqual(outlooks['claude']['five_hour'].status, 'blocked')
+
+
+class TestRefreshNow(unittest.TestCase):
+    """Tests for refresh_now(), the popup's Refresh button."""
+
+    def setUp(self):
+        self.app = _make_app()
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _wait_until_idle(self):
+        self.assertTrue(self.app._refresh_lock.acquire(timeout=2))
+        self.app._refresh_lock.release()
+
+    def test_updates_in_the_background(self):
+        done = threading.Event()
+        with patch.object(self.app, 'update', side_effect=done.set) as mock_update:
+            self.app.refresh_now()
+            self.assertTrue(done.wait(2))
+            self._wait_until_idle()
+
+        mock_update.assert_called_once_with()
+
+    def test_a_click_during_a_refresh_is_ignored(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_update():
+            started.set()
+            release.wait(2)
+
+        with patch.object(self.app, 'update', side_effect=slow_update) as mock_update:
+            self.app.refresh_now()
+            self.assertTrue(started.wait(2))
+            self.app.refresh_now()
+            release.set()
+            self._wait_until_idle()
+
+        mock_update.assert_called_once_with()
+
+    def test_refresh_works_again_after_a_failed_one(self):
+        with patch('threading.excepthook'), patch.object(self.app, 'update', side_effect=[RuntimeError('boom'), None]) as mock_update:
+            self.app.refresh_now()
+            self._wait_until_idle()
+            self.app.refresh_now()
+            self._wait_until_idle()
+
+        self.assertEqual(mock_update.call_count, 2)
+
+
+class TestQuotaOutlooks(unittest.TestCase):
+    """Tests for quota_outlooks(), shared by the tooltip and the popup."""
+
+    def setUp(self):
+        self.app = _make_app()
+        self.now = time.time()
+        self.app.cache = MagicMock()
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _usage(self, pct: float, hours: float, field: str = 'five_hour') -> dict:
+        reset = datetime.fromtimestamp(self.now + hours * 3600, tz=timezone.utc).isoformat()
+        return {field: {'utilization': pct, 'resets_at': reset}}
+
+    def test_every_active_provider_gets_outlooks(self):
+        self.app.cache.snapshot.usage = self._usage(100.0, 1)
+        self.app.kimi_cache = MagicMock()
+        self.app.kimi_cache.snapshot.usage = self._usage(10.0, 4)
+
+        outlooks = self.app.quota_outlooks()
+
+        self.assertEqual(sorted(outlooks), ['claude', 'kimi'])
+        self.assertEqual(outlooks['claude']['five_hour'].status, 'blocked')
+        self.assertEqual(outlooks['kimi']['five_hour'].status, 'ok')
+
+    def test_history_shapes_the_forecast(self):
+        """A flat last half hour keeps a busy session below the limit."""
+        usage = self._usage(60.0, 2.5)
+        self.app.cache.snapshot.usage = usage
+        self.assertEqual(self.app.quota_outlooks()['claude']['five_hour'].status, 'limit')
+
+        self.app.dashboard.history.record('claude', usage, ts=self.now - 25 * 60)
+
+        self.assertEqual(self.app.quota_outlooks()['claude']['five_hour'].status, 'ok')
+
+    @patch('agentpulse.settings.PREDICTION_ENABLED', False)
+    def test_without_predictions_only_reached_limits_count(self):
+        self.app.cache.snapshot.usage = {**self._usage(95.0, 1), **self._usage(100.0, 48, 'seven_day')}
+
+        outlooks = self.app.quota_outlooks()['claude']
+
+        self.assertEqual(outlooks['five_hour'].status, 'ok')
+        self.assertIsNone(outlooks['five_hour'].forecast_pct)
+        self.assertEqual(outlooks['seven_day'].status, 'blocked')
 
 
 # ---------------------------------------------------------------------------
@@ -1415,6 +1703,35 @@ class TestIsUserAway(unittest.TestCase):
     def test_active_user_not_away(self, _idle, _locked):
         """User is not away when active (0 idle seconds)."""
         self.assertFalse(self.app._is_user_away())
+
+
+class TestMakeAppMachineState(unittest.TestCase):
+    """The test app ignores the idle and lock state of the machine running the tests."""
+
+    @patch('agentpulse.app.is_workstation_locked', return_value=True)
+    @patch('agentpulse.app.get_idle_seconds', return_value=3600.0)
+    @patch('agentpulse.app.IDLE_PAUSE', 300)
+    def test_idle_locked_machine_does_not_defer_alerts(self, _idle, _locked):
+        """A runner without input for an hour or on a locked desktop still shows the alerts under test."""
+        app = _make_app()
+        try:
+            self.assertFalse(app._is_user_away())
+            app._notify_or_defer('threshold_five_hour', 'message', 'title')
+            app.icon.notify.assert_called_once_with('message', 'title')
+            self.assertEqual(app._deferred_notifications, {})
+        finally:
+            _cleanup(app)
+
+    @patch('agentpulse.app.is_workstation_locked', return_value=True)
+    @patch('agentpulse.app.get_idle_seconds', return_value=3600.0)
+    @patch('agentpulse.app.IDLE_PAUSE', 300)
+    def test_cleanup_restores_idle_and_lock_probes(self, _idle, locked_probe):
+        """After cleanup the app reads the probes that were in place before it was created."""
+        app = _make_app()
+        _cleanup(app)
+
+        self.assertTrue(app._is_user_away())
+        locked_probe.assert_called()
 
 
 # ---------------------------------------------------------------------------

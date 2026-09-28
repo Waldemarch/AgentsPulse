@@ -1076,3 +1076,77 @@ class TestKimiProviderSettings(unittest.TestCase):
 
     def test_provider_labels_cover_every_provider(self):
         self.assertEqual(set(settings_mod.PROVIDER_LABELS), {'claude', 'codex', 'kimi'})
+
+
+class TestIconStyleSettings(unittest.TestCase):
+    """Tests for the icon_style setting (tray icon bars, rings or number)."""
+
+    def _run_validate(self, data: dict) -> tuple[dict, MagicMock]:
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate(dict(data), Path('/fake/settings.json'))
+        return result, mock_ctypes
+
+    def test_every_style_is_accepted_from_the_file(self):
+        for style in settings_mod.ICON_STYLES:
+            with self.subTest(style=style):
+                result, mock = self._run_validate({'icon_style': style})
+                self.assertEqual(result['icon_style'], style)
+                mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_unknown_style_in_the_file_is_dropped_with_a_message(self):
+        result, mock = self._run_validate({'icon_style': 'sparkles'})
+
+        self.assertNotIn('icon_style', result)
+        mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_bars_are_the_default(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            loaded = _load(Path(app_tmp), Path(home_tmp))
+
+        self.assertEqual(loaded.get('icon_style', 'bars'), 'bars')
+        self.assertEqual(settings_mod.ICON_STYLES[0], 'bars')
+
+    def test_style_is_dashboard_writable(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'icon_style': 'number'})
+
+        self.assertEqual((accepted, errors), ({'icon_style': 'number'}, []))
+
+    def test_dashboard_rejects_an_unknown_style(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'icon_style': 'sparkles'})
+
+        self.assertEqual(accepted, {})
+        self.assertTrue(errors)
+
+    def test_dashboard_settings_expose_the_style(self):
+        self.assertIn(settings_mod.dashboard_settings()['icon_style'], settings_mod.ICON_STYLES)
+
+    def test_saved_style_applies_without_a_restart(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            original = settings_mod.ICON_STYLE
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    ok, _errors, _path = settings_mod.save_dashboard_settings({'icon_style': 'rings'})
+                    self.assertTrue(ok)
+                    self.assertEqual(settings_mod.ICON_STYLE, 'rings')
+            finally:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.save_dashboard_settings({'icon_style': original})
+
+
+class TestPopupColorSettings(unittest.TestCase):
+    """Tests for the tight bar colour and the provider colours."""
+
+    def test_tight_bar_colour_is_a_colour_setting(self):
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate({'bar_fg_tight': 42}, Path('/fake/settings.json'))
+
+        self.assertNotIn('bar_fg_tight', result)
+        mock_ctypes.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_every_provider_has_a_colour(self):
+        self.assertEqual(set(settings_mod.PROVIDER_COLORS), set(settings_mod.PROVIDER_LABELS))

@@ -1,4 +1,9 @@
-"""HTML popup window and popup data projection."""
+"""
+Usage Popup
+===========
+
+HTML popup window and popup data projection.
+"""
 from __future__ import annotations
 
 import ctypes
@@ -15,22 +20,23 @@ import webview  # type: ignore[import-untyped]
 from . import __version__
 from .claude_cli import CHANGELOG_URL, find_installations
 from .formatting import (
-    elapsed_pct, expand_popup_fields, field_period, format_burn_text,
-    format_credits, midnight_positions, popup_label, time_until,
+    elapsed_pct, expand_popup_fields, field_period, format_credits,
+    format_outlook, midnight_positions, popup_label, time_until,
 )
 from .i18n import T
 from .provider_cache import UsageSnapshot
 from .providers import SECONDARY_PROVIDERS_BY_NAME
 from . import settings
 from .settings import (
-    BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG,
-    FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS, PROVIDER_LABELS,
+    BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_TIGHT, BAR_FG_WARN, BAR_MARKER, BG,
+    FG, FG_DIM, FG_HEADING, FG_LINK, POLL_FAST, POPUP_FIELDS, PROVIDER_COLORS, PROVIDER_LABELS,
     save_dashboard_settings,
 )
 
 if TYPE_CHECKING:
     from .app import AgentPulse
     from .cache import CacheSnapshot
+    from .forecast import Outlook
 
 __all__ = ['UsagePopup']
 
@@ -41,6 +47,8 @@ _WS_EX_APPWINDOW = 0x00040000
 _WS_EX_TOOLWINDOW = 0x00000080
 _WS_EX_LAYERED = 0x00080000
 _LWA_ALPHA = 0x00000002
+# Providers without an entry in PROVIDER_COLORS share a neutral colour.
+_OTHER_PROVIDER_COLOR = '#898781'
 
 
 def _profile_view(profile: dict[str, Any] | None) -> dict[str, str] | None:
@@ -54,35 +62,55 @@ def _profile_view(profile: dict[str, Any] | None) -> dict[str, str] | None:
     }
 
 
-def _usage_entries(usage: dict[str, Any]) -> list[tuple[str, dict[str, Any] | None, int | None]]:
-    entries: list[tuple[str, dict[str, Any] | None, int | None]] = []
+def _usage_entries(usage: dict[str, Any]) -> list[tuple[str, dict[str, Any] | None, int | None, str]]:
+    """Return ``(label, entry, window length, field)`` for every popup field with usage, in display order."""
+    entries: list[tuple[str, dict[str, Any] | None, int | None, str]] = []
     for key in expand_popup_fields(POPUP_FIELDS, usage):
         value = usage.get(key)
         if isinstance(value, dict) and value.get('utilization') is not None:
-            entries.append((popup_label(key), value, field_period(key)))
+            entries.append((popup_label(key), value, field_period(key), key))
     return entries
 
 
-def _bar_view(label: str, entry: dict[str, Any], period: int | None) -> dict[str, Any]:
+def _bar_view(label: str, entry: dict[str, Any], period: int | None, outlook: Outlook | None = None) -> dict[str, Any]:
+    """Build one usage bar: fill, forecast to the reset, status, reset text and time markers.
+
+    Without an outlook (no reset time or unknown window) the bar only tells a
+    reached limit from a usable one.
+    """
     pct = entry.get('utilization', 0) or 0
-    resets_at = entry.get('resets_at', '')
+    resets_at = entry.get('resets_at', '') or ''
     time_pct = elapsed_pct(resets_at, period) if period else None
+    if outlook is not None:
+        status = outlook.status
+        status_text = format_outlook(outlook)
+        forecast = outlook.forecast_pct
+    else:
+        status = 'blocked' if pct >= 100 else 'ok'
+        status_text = T['status_blocked'] if pct >= 100 else ''
+        forecast = None
+    shown = forecast is not None and status in {'ok', 'tight'}
     return {
         'label': label,
         'pct_text': f'{pct:.0f}%',
         'fill_pct': max(0.0, min(1.0, pct / 100)),
-        'warn': pct >= 100 or (time_pct is not None and pct > time_pct),
+        'status': status,
+        'status_text': status_text,
+        'forecast_pct': None if forecast is None else max(0.0, min(1.0, forecast / 100)),
+        # A projected limit already names its time, so only calm and tight bars add the forecast.
+        'forecast_text': T['forecast_short'].format(pct=f'{forecast:.0f}') if shown else '',
+        'forecast_title': T['forecast_at_reset'].format(pct=f'{forecast:.0f}') if shown else '',
         'reset_text': time_until(resets_at) if resets_at else '',
-        'burn_text': format_burn_text(pct, resets_at, period),
         'midnights': midnight_positions(resets_at, period) if period else [],
         'marker_rel': max(0.0, min(1.0, time_pct / 100)) if time_pct is not None else None,
     }
 
 
-def _usage_view(usage: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _usage_view(usage: dict[str, Any] | None, outlooks: dict[str, Outlook] | None = None) -> list[dict[str, Any]]:
     if not usage:
         return []
-    return [_bar_view(label, entry, period) for label, entry, period in _usage_entries(usage) if entry]
+    known = outlooks or {}
+    return [_bar_view(label, entry, period, known.get(key)) for label, entry, period, key in _usage_entries(usage) if entry]
 
 
 def _status_view(usage: dict[str, Any] | None, last_error: str | None, last_success_time: float | None, refreshing: bool, next_poll_time: float | None) -> dict[str, Any]:
@@ -120,24 +148,25 @@ def _snapshot_to_dict(
     snap: CacheSnapshot,
     installations: list[dict[str, str]] | None = None,
     next_poll_time: float | None = None,
+    outlooks: dict[str, Outlook] | None = None,
 ) -> dict[str, Any]:
     if installations is None:
         installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
     return {
         'profile': _profile_view(snap.profile),
-        'usage': _usage_view(snap.usage),
+        'usage': _usage_view(snap.usage, outlooks),
         'extra': _extra_view(snap.usage),
         'installations': installations,
         'status': _status_view(snap.usage, snap.last_error, snap.last_success_time, snap.refreshing, next_poll_time),
     }
 
 
-def _secondary_snapshot_to_dict(snap: UsageSnapshot, cli_version: str | None = None) -> dict[str, Any]:
+def _secondary_snapshot_to_dict(snap: UsageSnapshot, cli_version: str | None = None, outlooks: dict[str, Outlook] | None = None) -> dict[str, Any]:
     """Build the popup view-model for a non-Claude provider."""
     installations = [{'name': 'CLI', 'version': cli_version}] if cli_version else []
     return {
         'profile': _profile_view(snap.profile),
-        'usage': _usage_view(snap.usage),
+        'usage': _usage_view(snap.usage, outlooks),
         'extra': None,
         'installations': installations,
         'status': _status_view(snap.usage, snap.last_error, snap.last_success_time, snap.refreshing, None),
@@ -149,6 +178,7 @@ def _provider_entries(claude_data: dict[str, Any], secondary: list[tuple[str, di
     entries = [{
         'id': 'claude',
         'label': PROVIDER_LABELS['claude'],
+        'color': PROVIDER_COLORS.get('claude', _OTHER_PROVIDER_COLOR),
         'install_title': T['claude_code'],
         'data': claude_data,
     }]
@@ -157,6 +187,7 @@ def _provider_entries(claude_data: dict[str, Any], secondary: list[tuple[str, di
         entries.append({
             'id': provider,
             'label': PROVIDER_LABELS[provider],
+            'color': PROVIDER_COLORS.get(provider, _OTHER_PROVIDER_COLOR),
             'install_title': T.get(spec.install_title_key, spec.install_title_fallback),
             'data': data,
         })
@@ -167,6 +198,7 @@ def _init_config(
     snap: CacheSnapshot,
     secondary: list[tuple[str, dict[str, Any]]] | None = None,
     next_poll_time: float | None = None,
+    outlooks: dict[str, Outlook] | None = None,
 ) -> dict[str, Any]:
     return {
         'colors': {
@@ -177,6 +209,7 @@ def _init_config(
             'fg_link': FG_LINK,
             'bar_bg': BAR_BG,
             'bar_fg': BAR_FG,
+            'bar_fg_tight': BAR_FG_TIGHT,
             'bar_fg_warn': BAR_FG_WARN,
             'bar_divider': BAR_DIVIDER,
             'bar_marker': BAR_MARKER,
@@ -204,15 +237,20 @@ def _init_config(
             'email_show': T.get('email_show', 'Show'),
             'email_blur': T.get('email_blur', 'Blur'),
             'email_hide': T.get('email_hide', 'Hide'),
+            'open_dashboard': T['popup_open_dashboard'],
+            'refresh': T['popup_refresh'],
+            'refresh_fresh': T['popup_refresh_fresh'],
         },
         'app_version': __version__,
+        # The caches skip a provider updated this recently, so Refresh waits until then.
+        'refresh_cooldown': POLL_FAST,
         'popup_settings': {
             # Read via the module so values saved from the popup (which call
             # settings.reload()) are reflected the next time it opens.
             'show_install_section': settings.SHOW_INSTALL_SECTION,
             'email_display': settings.EMAIL_DISPLAY,
         },
-        'providers': _provider_entries(_snapshot_to_dict(snap, next_poll_time=next_poll_time), secondary or []),
+        'providers': _provider_entries(_snapshot_to_dict(snap, next_poll_time=next_poll_time, outlooks=(outlooks or {}).get('claude')), secondary or []),
     }
 
 
@@ -236,6 +274,13 @@ class _PopupApi:
     def save_popup_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         ok, errors, _ = save_dashboard_settings(data)
         return {'ok': ok, 'errors': errors}
+
+    def open_dashboard(self) -> None:
+        self._popup.app.on_open_dashboard()
+        self._popup._close()
+
+    def refresh(self) -> None:
+        self._popup.app.refresh_now()
 
 
 class UsagePopup:
@@ -278,10 +323,12 @@ class UsagePopup:
         self._closed.wait()
 
     def _on_loaded(self) -> None:
+        outlooks = self.app.quota_outlooks()
         config = _init_config(
             self.app.cache.snapshot,
-            secondary=self._secondary_views(),
+            secondary=self._secondary_views(outlooks),
             next_poll_time=self.app.next_poll_time,
+            outlooks=outlooks,
         )
         self._window.evaluate_js(f'init({json.dumps(config)})')
         self._popup_hwnd = self._window.native.Handle.ToInt32()
@@ -393,17 +440,18 @@ class UsagePopup:
                     installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
                 self._last_secondary_versions = versions
                 last_poll = poll_now
-                claude_data = _snapshot_to_dict(snap, installations=installations, next_poll_time=poll_now)
+                outlooks = self.app.quota_outlooks()
+                claude_data = _snapshot_to_dict(snap, installations=installations, next_poll_time=poll_now, outlooks=outlooks.get('claude'))
                 entries = [{'id': 'claude', 'data': claude_data}]
-                entries.extend({'id': name, 'data': data} for name, data in self._secondary_views())
+                entries.extend({'id': name, 'data': data} for name, data in self._secondary_views(outlooks))
                 self._window.evaluate_js(f'updateProviders({json.dumps(entries)})')
             except Exception:
                 return
 
-    def _secondary_views(self) -> list[tuple[str, dict[str, Any]]]:
+    def _secondary_views(self, outlooks: dict[str, dict[str, Outlook]]) -> list[tuple[str, dict[str, Any]]]:
         """Build the popup view-model of every active non-Claude provider."""
         return [
-            (name, _secondary_snapshot_to_dict(cache.snapshot, self._cli_versions.get(name)))
+            (name, _secondary_snapshot_to_dict(cache.snapshot, self._cli_versions.get(name), outlooks.get(name)))
             for name, cache in self._secondary
         ]
 

@@ -285,6 +285,149 @@ class TestCreateIconImage(unittest.TestCase):
         self.assertEqual(img.getextrema()[3], (0, 0))
 
 
+def _coloured(pixel: tuple[int, int, int, int]) -> bool:
+    """True for an opaque status colour (blue, orange, red, green), False for the grey track or transparency."""
+    return pixel[3] > 150 and max(pixel[:3]) - min(pixel[:3]) > 60
+
+
+class TestIconStyles(unittest.TestCase):
+    """Tests for the bars, rings and number styles of create_icon_image()."""
+
+    STYLES = ('bars', 'rings', 'number')
+
+    def setUp(self):
+        tray_icon_mod.load_font.cache_clear()
+        self._font = patch.object(tray_icon_mod, 'load_font', side_effect=lambda size, symbol=False: _real_font())
+        self._font.start()
+
+    def tearDown(self):
+        self._font.stop()
+        tray_icon_mod.load_font.cache_clear()
+
+    def test_every_style_is_a_64px_rgba_image(self):
+        for style in self.STYLES:
+            with self.subTest(style=style):
+                image = tray_icon_mod.create_icon_image([10, 50, 90], style=style)
+                self.assertEqual((image.size, image.mode), ((64, 64), 'RGBA'))
+
+    def test_styles_look_different(self):
+        images = {tray_icon_mod.create_icon_image([30, 60], style=style).tobytes() for style in self.STYLES}
+
+        self.assertEqual(len(images), 3)
+
+    def test_unknown_style_falls_back_to_bars(self):
+        bars = tray_icon_mod.create_icon_image([30, 60], style='bars')
+        unknown = tray_icon_mod.create_icon_image([30, 60], style='sparkles')
+
+        self.assertEqual(bars.tobytes(), unknown.tobytes())
+
+    def test_bars_fill_from_the_bottom(self):
+        image = tray_icon_mod.create_icon_image([50], style='bars')
+
+        self.assertTrue(_coloured(image.getpixel((32, 55))))
+        self.assertFalse(_coloured(image.getpixel((32, 10))))
+
+    def test_bar_with_little_usage_stays_visible(self):
+        image = tray_icon_mod.create_icon_image([1], style='bars')
+
+        self.assertTrue(_coloured(image.getpixel((32, 58))))
+
+    def test_zero_usage_shows_only_tracks(self):
+        for style in ('bars', 'rings'):
+            with self.subTest(style=style):
+                image = tray_icon_mod.create_icon_image([0, 0], style=style)
+                self.assertFalse(any(_coloured(pixel) for pixel in image.getdata()))
+
+    def test_rings_fill_the_used_share_clockwise_from_the_top(self):
+        image = tray_icon_mod.create_icon_image([25], style='rings')
+
+        self.assertTrue(_coloured(image.getpixel((48, 16))))
+        self.assertFalse(_coloured(image.getpixel((16, 16))))
+
+    def test_ring_at_95_percent_or_more_turns_solid_red(self):
+        almost = tray_icon_mod.create_icon_image([95], style='rings')
+        full = tray_icon_mod.create_icon_image([100], style='rings')
+
+        self.assertEqual(almost.tobytes(), full.tobytes())
+        self.assertTrue(_coloured(almost.getpixel((16, 16))))
+
+    def test_bars_and_rings_stay_inside_the_canvas(self):
+        for style in ('bars', 'rings'):
+            with self.subTest(style=style):
+                image = tray_icon_mod.create_icon_image([100, 100, 100], style=style)
+                border = [image.getpixel((x, y)) for x in range(64) for y in (0, 63)] + [image.getpixel((x, y)) for y in range(64) for x in (0, 63)]
+                self.assertTrue(all(pixel[3] == 0 for pixel in border))
+
+    def test_more_bars_than_the_usual_three(self):
+        image = tray_icon_mod.create_icon_image([10, 20, 30, 40], style='bars')
+
+        self.assertEqual(image.size, (64, 64))
+
+    def test_number_shows_the_highest_percentage(self):
+        with patch.object(tray_icon_mod, '_draw_centered_text') as mock_text:
+            tray_icon_mod.create_icon_image([55, 97, 20], style='number')
+
+        self.assertEqual(mock_text.call_args.args[1], '97')
+        self.assertEqual(mock_text.call_args.args[2], tray_icon_mod._STATUS_CRIT)
+
+    def test_number_uses_the_taskbar_colour_below_the_warning_level(self):
+        with patch.object(tray_icon_mod, '_draw_centered_text') as mock_text:
+            tray_icon_mod.create_icon_image([12.4], light_taskbar=False, style='number')
+
+        self.assertEqual(mock_text.call_args.args[1], '12')
+        self.assertEqual(mock_text.call_args.args[2], tray_icon_mod.ICON_LIGHT['fg'])
+
+    def test_number_shows_an_exclamation_mark_at_the_limit(self):
+        with patch.object(tray_icon_mod, '_draw_centered_text') as mock_text:
+            tray_icon_mod.create_icon_image([100, 40], style='number')
+
+        self.assertEqual(mock_text.call_args.args[1], '!')
+
+    def test_number_without_providers_shows_zero(self):
+        with patch.object(tray_icon_mod, '_draw_centered_text') as mock_text:
+            tray_icon_mod.create_icon_image([], style='number')
+
+        self.assertEqual(mock_text.call_args.args[1], '0')
+
+
+class TestCountdownAndReadyImages(unittest.TestCase):
+    """Tests for the countdown and check-mark icons."""
+
+    def setUp(self):
+        tray_icon_mod.load_font.cache_clear()
+
+    def tearDown(self):
+        tray_icon_mod.load_font.cache_clear()
+
+    def test_countdown_writes_the_time_left_on_a_red_disc(self):
+        with patch.object(tray_icon_mod, '_draw_centered_text') as mock_text:
+            image = tray_icon_mod.create_countdown_image('47')
+
+        self.assertEqual(mock_text.call_args.args[1:3], ('47', tray_icon_mod._WHITE))
+        pixel = image.getpixel((32, 4))
+        self.assertTrue(_coloured(pixel) and pixel[0] > pixel[2])
+        self.assertEqual(image.getpixel((0, 0))[3], 0)
+
+    def test_countdown_text_renders_with_a_real_font(self):
+        with patch.object(tray_icon_mod, 'load_font', side_effect=lambda size, symbol=False: _real_font()):
+            image = tray_icon_mod.create_countdown_image('23h')
+
+        self.assertEqual((image.size, image.mode), ((64, 64), 'RGBA'))
+
+    def test_ready_is_a_check_mark_on_a_green_disc(self):
+        image = tray_icon_mod.create_ready_image()
+
+        pixel = image.getpixel((32, 6))
+        self.assertTrue(_coloured(pixel) and pixel[1] > pixel[0] and pixel[1] > pixel[2])
+        self.assertEqual(image.getpixel((0, 0))[3], 0)
+
+    def test_ready_draws_no_text(self):
+        with patch.object(tray_icon_mod, 'load_font') as mock_font:
+            tray_icon_mod.create_ready_image()
+
+        mock_font.assert_not_called()
+
+
 class TestCreateStatusImage(unittest.TestCase):
     """Tests for create_status_image()."""
 

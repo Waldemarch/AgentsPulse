@@ -3,7 +3,8 @@ Formatting Tests
 =================
 
 Unit tests for parse_field_name(), tooltip_label(), elapsed_pct(),
-burn_rate_info(), time_until(), format_tooltip(), and format_credits().
+format_outlook(), countdown_label(), time_until(), format_tooltip(), and
+format_credits().
 """
 from __future__ import annotations
 
@@ -14,10 +15,11 @@ from unittest.mock import MagicMock, patch
 
 from agentpulse.formatting import (
     PERIOD_5H, PERIOD_7D,
-    burn_rate_info, elapsed_pct, expand_popup_fields, field_period, format_burn_text, format_credits, format_tooltip,
+    countdown_label, elapsed_pct, expand_popup_fields, field_period, format_credits, format_outlook, format_tooltip,
     period_to_field_name,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
+from agentpulse.forecast import Outlook
 from agentpulse.i18n import LOCALE_DIR
 
 EN = json.loads((LOCALE_DIR / 'en.json').read_text(encoding='utf-8'))
@@ -416,75 +418,60 @@ class TestElapsedPct(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# burn_rate_info / format_burn_text
+# format_outlook / format_clock / countdown_label
 # ---------------------------------------------------------------------------
 
-@patch('agentpulse.formatting.datetime')
-class TestBurnRateInfo(unittest.TestCase):
-    """Tests for burn_rate_info() and format_burn_text()."""
+def _outlook(status: str, limit_at: float | None = None) -> Outlook:
+    return Outlook(status, 50.0, limit_at, 0.0, 50.0, 'pace')
 
-    NOW = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
 
-    def _setup(self, mock_dt):
-        mock_dt.now.return_value = self.NOW
-        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+@patch('agentpulse.formatting.T', EN)
+class TestFormatOutlook(unittest.TestCase):
+    """Tests for format_outlook() - the status text next to a quota."""
 
-    def _reset_in(self, **delta):
-        return (self.NOW + timedelta(**delta)).isoformat()
+    NOW = datetime(2026, 1, 14, 9, 0).timestamp()
 
-    def test_eta_when_limit_comes_before_reset(self, mock_dt):
-        """Two hours into a 5 h window at 80%: 40 pp/h reaches 100% in 30 min, reset is 3 h away."""
-        self._setup(mock_dt)
-        info = burn_rate_info(80.0, self._reset_in(hours=3), PERIOD_5H)
+    def test_each_status_has_its_text(self):
+        self.assertEqual(format_outlook(_outlook('ok')), EN['status_ok'])
+        self.assertEqual(format_outlook(_outlook('tight')), EN['status_tight'])
+        self.assertEqual(format_outlook(_outlook('blocked')), EN['status_blocked'])
 
-        self.assertAlmostEqual(info['eta_seconds'], 30 * 60)
-        self.assertFalse(info['healthy'])
+    def test_limit_without_a_time(self):
+        self.assertEqual(format_outlook(_outlook('limit')), EN['status_limit'])
 
-    def test_no_eta_when_window_resets_first(self, mock_dt):
-        """At 20% two hours in, 100% would take 8 more hours, but the window resets in 3."""
-        self._setup(mock_dt)
-        info = burn_rate_info(20.0, self._reset_in(hours=3), PERIOD_5H)
+    def test_limit_names_the_local_time_today(self):
+        limit_at = datetime(2026, 1, 14, 15, 47).timestamp()
 
-        self.assertIsNone(info['eta_seconds'])
-        self.assertTrue(info['healthy'])
+        self.assertEqual(format_outlook(_outlook('limit', limit_at), now=self.NOW), 'Limit ~15:47')
 
-    def test_no_eta_when_limit_and_reset_coincide(self, mock_dt):
-        """Reaching 100% exactly at the reset is not an exhaustion worth counting down to."""
-        self._setup(mock_dt)
-        info = burn_rate_info(40.0, self._reset_in(hours=3), PERIOD_5H)
+    def test_limit_on_a_later_day_names_the_day(self):
+        tomorrow = datetime(2026, 1, 15, 8, 5).timestamp()
+        saturday = datetime(2026, 1, 17, 10, 0).timestamp()
 
-        self.assertIsNone(info['eta_seconds'])
+        self.assertEqual(format_outlook(_outlook('limit', tomorrow), now=self.NOW), 'Limit ~tomorrow 08:05')
+        self.assertEqual(format_outlook(_outlook('limit', saturday), now=self.NOW), 'Limit ~Sat 10:00')
 
-    def test_no_eta_at_zero_or_full_usage(self, mock_dt):
-        self._setup(mock_dt)
 
-        self.assertIsNone(burn_rate_info(0.0, self._reset_in(hours=3), PERIOD_5H)['eta_seconds'])
-        self.assertIsNone(burn_rate_info(100.0, self._reset_in(hours=3), PERIOD_5H)['eta_seconds'])
+@patch('agentpulse.formatting.T', EN)
+class TestCountdownLabel(unittest.TestCase):
+    """Tests for countdown_label() - the time left shown on the tray icon."""
 
-    def test_weekly_eta_uses_the_weekly_window(self, mock_dt):
-        """Three days into a week at 60%: 20 pp/day reaches 100% in 2 days, reset is 4 days away."""
-        self._setup(mock_dt)
-        info = burn_rate_info(60.0, self._reset_in(days=4), PERIOD_7D)
+    def test_minutes_below_an_hour(self):
+        self.assertEqual(countdown_label(47 * 60), '47')
+        self.assertEqual(countdown_label(46 * 60 + 1), '47')
 
-        self.assertAlmostEqual(info['eta_seconds'], 2 * 24 * 3600)
+    def test_last_minute_shows_one_not_zero(self):
+        self.assertEqual(countdown_label(20), '1')
+        self.assertEqual(countdown_label(0), '1')
 
-    def test_none_without_reset_time(self, mock_dt):
-        self._setup(mock_dt)
+    def test_hours_below_a_day(self):
+        self.assertEqual(countdown_label(59.5 * 60), '1h')
+        self.assertEqual(countdown_label(5 * 3600 + 59 * 60), '5h')
+        self.assertEqual(countdown_label(23 * 3600 + 59 * 60), '23h')
 
-        self.assertIsNone(burn_rate_info(50.0, '', PERIOD_5H))
-
-    def test_none_before_window_started(self, mock_dt):
-        self._setup(mock_dt)
-
-        self.assertIsNone(burn_rate_info(50.0, self._reset_in(hours=5), PERIOD_5H))
-
-    def test_burn_text_shows_eta_only_when_limit_comes_first(self, mock_dt):
-        self._setup(mock_dt)
-        ahead = format_burn_text(80.0, self._reset_in(hours=3), PERIOD_5H)
-        on_pace = format_burn_text(20.0, self._reset_in(hours=3), PERIOD_5H)
-
-        self.assertEqual(ahead, EN['burn_eta'].format(duration=EN['duration_m'].format(m=30), pace=EN['pace_ahead']))
-        self.assertEqual(on_pace, EN['pace_healthy'])
+    def test_days_from_a_day_on(self):
+        self.assertEqual(countdown_label(24 * 3600), '1d')
+        self.assertEqual(countdown_label(2.9 * 24 * 3600), '2d')
 
 
 # ---------------------------------------------------------------------------
@@ -763,15 +750,31 @@ class TestFormatTooltip(unittest.TestCase):
     @patch('agentpulse.formatting.time_until', return_value='Resets in 2h 30m (14:30)')
     def test_with_reset_info(self, _mock_tu):
         data = {'five_hour': {'utilization': 42.0, 'resets_at': '2025-01-15T14:30:00+00:00'}}
-        self.assertIn('Claude Usage\n5h: 42% (Resets in 2h 30m (14:30))', format_tooltip(data))
-        # The reset lies in the past, so there is no exhaustion left to count down to.
-        self.assertNotIn('ETA', format_tooltip(data))
+        self.assertEqual(format_tooltip(data), 'Claude Usage\n5h: 42% (Resets in 2h 30m (14:30))')
 
     @patch('agentpulse.formatting.time_until', return_value='Resets in 3h 0m (15:00)')
-    def test_eta_shown_when_limit_comes_before_reset(self, _mock_tu):
-        reset = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
-        data = {'five_hour': {'utilization': 80.0, 'resets_at': reset}}
-        self.assertIn('ETA', format_tooltip(data))
+    def test_status_follows_each_field_with_an_outlook(self, _mock_tu):
+        data = {
+            'five_hour': {'utilization': 80.0, 'resets_at': '2025-01-15T15:00:00+00:00'},
+            'seven_day': {'utilization': 20.0, 'resets_at': '2025-01-18T15:00:00+00:00'},
+        }
+        outlooks = {'claude': {'five_hour': _outlook('tight')}}
+
+        lines = format_tooltip(data, outlooks=outlooks).split('\n')
+
+        self.assertEqual(lines[1], '5h: 80% (Resets in 3h 0m (15:00)) - Tight')
+        self.assertEqual(lines[2], '7d: 20% (Resets in 3h 0m (15:00))')
+
+    @patch('agentpulse.formatting.time_until', return_value='')
+    def test_secondary_provider_uses_its_own_outlooks(self, _mock_tu):
+        data = {'five_hour': {'utilization': 10.0, 'resets_at': ''}}
+        kimi = {'five_hour': {'utilization': 100.0, 'resets_at': ''}}
+        outlooks = {'claude': {'five_hour': _outlook('ok')}, 'kimi': {'five_hour': _outlook('blocked')}}
+
+        result = format_tooltip(data, [('kimi', kimi)], outlooks)
+
+        self.assertIn('5h: 10% - On track', result)
+        self.assertIn('5h: 100% - Limit reached', result)
 
     @patch('agentpulse.formatting.time_until', return_value='')
     def test_utilization_none_skipped(self, _mock_tu):
