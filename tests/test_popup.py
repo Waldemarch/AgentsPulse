@@ -8,13 +8,21 @@ and _init_config.
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from agentpulse.cache import CacheSnapshot
+from agentpulse.forecast import Outlook
+from agentpulse.i18n import T
 from agentpulse.popup import (
-    UsagePopup, _BASELINE_DPI, _init_config, _provider_entries,
+    UsagePopup, _BASELINE_DPI, _PopupApi, _init_config, _provider_entries,
     _secondary_snapshot_to_dict, _snapshot_to_dict, _usage_entries,
 )
+from agentpulse.settings import PROVIDER_COLORS
+
+
+def _outlook(status: str, *, forecast: float | None = None, limit_at: float | None = None) -> Outlook:
+    return Outlook(status, forecast, limit_at, 0.0, 50.0, 'pace')
 
 
 def _snap(
@@ -205,7 +213,10 @@ class TestSnapshotToDict(unittest.TestCase):
         bar = result['usage'][0]
         self.assertEqual(bar['pct_text'], '42%')
         self.assertAlmostEqual(bar['fill_pct'], 0.42)
-        self.assertFalse(bar['warn'])
+        self.assertEqual(bar['status'], 'ok')
+        self.assertEqual(bar['status_text'], '')
+        self.assertIsNone(bar['forecast_pct'])
+        self.assertEqual(bar['forecast_text'], '')
         self.assertIsNone(bar['marker_rel'])
         self.assertEqual(bar['reset_text'], '5h 0m')
         self.assertEqual(bar['midnights'], [])
@@ -213,62 +224,81 @@ class TestSnapshotToDict(unittest.TestCase):
     @patch('agentpulse.popup.elapsed_pct', return_value=30.0)
     @patch('agentpulse.popup.time_until', return_value='3h 30m')
     @patch('agentpulse.popup.midnight_positions', return_value=[0.5])
-    def test_warn_when_usage_ahead_of_time(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Bar is marked warn when utilization exceeds elapsed percentage."""
+    def test_usage_ahead_of_time_alone_is_no_warning(self, _mock_midnights, _mock_time_until, _mock_elapsed):
+        """Using more than the elapsed share is fine unless the forecast says the limit comes first."""
         usage = {'five_hour': {'utilization': 60, 'resets_at': '2026-01-01T05:00:00Z'}}
-        result = _snapshot_to_dict(_snap(usage=usage), installations=[])
+        result = _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks={'five_hour': _outlook('ok', forecast=70.0)})
 
         bar = result['usage'][0]
-        self.assertTrue(bar['warn'])
+        self.assertEqual(bar['status'], 'ok')
         self.assertAlmostEqual(bar['marker_rel'], 0.3)
 
-    @patch('agentpulse.popup.elapsed_pct', return_value=80.0)
-    @patch('agentpulse.popup.time_until', return_value='1h 0m')
-    @patch('agentpulse.popup.midnight_positions', return_value=[])
-    def test_no_warn_when_usage_behind_time(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Bar is not warn when utilization is below elapsed percentage."""
-        usage = {'five_hour': {'utilization': 40, 'resets_at': '2026-01-01T05:00:00Z'}}
-        result = _snapshot_to_dict(_snap(usage=usage), installations=[])
+    @patch('agentpulse.popup.time_until', return_value='2h 30m')
+    def test_tight_bar_carries_status_and_forecast(self, _mock_time_until):
+        usage = {'five_hour': {'utilization': 50, 'resets_at': '2026-01-01T05:00:00Z'}}
+        result = _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks={'five_hour': _outlook('tight', forecast=93.4)})
 
         bar = result['usage'][0]
-        self.assertFalse(bar['warn'])
+        self.assertEqual(bar['status'], 'tight')
+        self.assertEqual(bar['status_text'], T['status_tight'])
+        self.assertAlmostEqual(bar['forecast_pct'], 0.934)
+        self.assertEqual(bar['forecast_text'], T['forecast_short'].format(pct='93'))
+        self.assertEqual(bar['forecast_title'], T['forecast_at_reset'].format(pct='93'))
 
-    @patch('agentpulse.popup.elapsed_pct', return_value=50.0)
     @patch('agentpulse.popup.time_until', return_value='2h 30m')
-    @patch('agentpulse.popup.midnight_positions', return_value=[])
-    def test_no_warn_when_equal(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Exactly equal usage and elapsed is not a warning (strictly greater)."""
-        usage = {'five_hour': {'utilization': 50, 'resets_at': '2026-01-01T05:00:00Z'}}
-        result = _snapshot_to_dict(_snap(usage=usage), installations=[])
-        self.assertFalse(result['usage'][0]['warn'])
+    def test_limit_bar_names_its_time_instead_of_a_forecast(self, _mock_time_until):
+        """A projected limit already tells its time, so the chip adds no percentage."""
+        limit_at = datetime(2026, 1, 1, 15, 47).timestamp()
+        usage = {'five_hour': {'utilization': 70, 'resets_at': '2026-01-01T05:00:00Z'}}
+        outlook = _outlook('limit', forecast=100.0, limit_at=limit_at)
+        result = _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks={'five_hour': outlook})
+
+        bar = result['usage'][0]
+        self.assertEqual(bar['status'], 'limit')
+        self.assertTrue(bar['status_text'].endswith('15:47'))
+        self.assertEqual(bar['forecast_pct'], 1.0)
+        self.assertEqual(bar['forecast_text'], '')
 
     @patch('agentpulse.popup.elapsed_pct', return_value=None)
     @patch('agentpulse.popup.time_until', return_value='')
     @patch('agentpulse.popup.midnight_positions', return_value=[])
-    def test_warn_at_100_without_time_period(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Bar at 100% is warn even when no time period (time_pct is None)."""
+    def test_blocked_at_100_without_an_outlook(self, _mock_midnights, _mock_time_until, _mock_elapsed):
+        """A reached limit shows even when the window cannot be projected (no reset time)."""
         usage = {'five_hour': {'utilization': 100, 'resets_at': ''}}
-        result = _snapshot_to_dict(_snap(usage=usage), installations=[])
-        self.assertTrue(result['usage'][0]['warn'])
+        bar = _snapshot_to_dict(_snap(usage=usage), installations=[])['usage'][0]
 
-    @patch('agentpulse.popup.elapsed_pct', return_value=100.0)
+        self.assertEqual(bar['status'], 'blocked')
+        self.assertEqual(bar['status_text'], T['status_blocked'])
+
     @patch('agentpulse.popup.time_until', return_value='')
-    @patch('agentpulse.popup.midnight_positions', return_value=[])
-    def test_warn_at_100_when_time_also_100(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Bar at 100% is warn even when elapsed time is also 100% (strict > would miss this)."""
+    def test_blocked_outlook_has_no_forecast_text(self, _mock_time_until):
         usage = {'five_hour': {'utilization': 100, 'resets_at': '2026-01-01T05:00:00Z'}}
-        result = _snapshot_to_dict(_snap(usage=usage), installations=[])
-        self.assertTrue(result['usage'][0]['warn'])
+        outlooks = {'five_hour': _outlook('blocked', forecast=100.0)}
+        bar = _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks=outlooks)['usage'][0]
+
+        self.assertEqual(bar['status'], 'blocked')
+        self.assertEqual(bar['forecast_text'], '')
+
+    @patch('agentpulse.popup.time_until', return_value='')
+    def test_each_bar_uses_its_own_field_outlook(self, _mock_time_until):
+        usage = {
+            'five_hour': {'utilization': 10, 'resets_at': '2026-01-01T05:00:00Z'},
+            'seven_day': {'utilization': 20, 'resets_at': '2026-01-07T00:00:00Z'},
+        }
+        outlooks = {'seven_day': _outlook('tight', forecast=91.0)}
+        bars = _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks=outlooks)['usage']
+
+        self.assertEqual([bar['status'] for bar in bars], ['ok', 'tight'])
 
     @patch('agentpulse.popup.elapsed_pct', return_value=None)
     @patch('agentpulse.popup.time_until', return_value='')
     @patch('agentpulse.popup.midnight_positions', return_value=[])
     def test_fill_pct_clamped_to_0_1(self, _mock_midnights, _mock_time_until, _mock_elapsed):
-        """Fill percentage is clamped between 0.0 and 1.0, and over-quota is always warn."""
+        """Fill percentage is clamped between 0.0 and 1.0, and over-quota is always blocked."""
         usage = {'five_hour': {'utilization': 150, 'resets_at': '2026-01-01T05:00:00Z'}}
         result = _snapshot_to_dict(_snap(usage=usage), installations=[])
         self.assertEqual(result['usage'][0]['fill_pct'], 1.0)
-        self.assertTrue(result['usage'][0]['warn'])
+        self.assertEqual(result['usage'][0]['status'], 'blocked')
 
     @patch('agentpulse.popup.elapsed_pct', return_value=None)
     @patch('agentpulse.popup.time_until', return_value='')
@@ -455,11 +485,11 @@ class TestInitConfig(unittest.TestCase):
     def test_top_level_keys(self):
         """Config has colors, t (translations), app_version, popup_settings, and providers."""
         config = _init_config(_snap())
-        self.assertEqual(set(config.keys()), {'colors', 't', 'app_version', 'popup_settings', 'providers'})
+        self.assertEqual(set(config.keys()), {'colors', 't', 'app_version', 'popup_settings', 'refresh_cooldown', 'providers'})
 
     def test_colors_from_settings(self):
         """Color values come from settings module constants."""
-        from agentpulse.settings import BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG, FG, FG_DIM, FG_HEADING, FG_LINK
+        from agentpulse.settings import BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_TIGHT, BAR_FG_WARN, BAR_MARKER, BG, FG, FG_DIM, FG_HEADING, FG_LINK
 
         config = _init_config(_snap())
         colors = config['colors']
@@ -470,6 +500,7 @@ class TestInitConfig(unittest.TestCase):
         self.assertEqual(colors['fg_link'], FG_LINK)
         self.assertEqual(colors['bar_bg'], BAR_BG)
         self.assertEqual(colors['bar_fg'], BAR_FG)
+        self.assertEqual(colors['bar_fg_tight'], BAR_FG_TIGHT)
         self.assertEqual(colors['bar_fg_warn'], BAR_FG_WARN)
         self.assertEqual(colors['bar_divider'], BAR_DIVIDER)
         self.assertEqual(colors['bar_marker'], BAR_MARKER)
@@ -495,6 +526,27 @@ class TestInitConfig(unittest.TestCase):
         self.assertEqual(t['duration_hm'], T['duration_hm'])
         self.assertEqual(t['duration_m'], T['duration_m'])
         self.assertEqual(t['duration_s'], T['duration_s'])
+        self.assertEqual(t['open_dashboard'], T['popup_open_dashboard'])
+        self.assertEqual(t['refresh'], T['popup_refresh'])
+        self.assertIn('{duration}', t['refresh_fresh'])
+
+    def test_refresh_waits_for_the_cache_cooldown(self):
+        """Refresh stays off while the caches would skip the fetch anyway."""
+        from agentpulse.settings import POLL_FAST
+
+        self.assertEqual(_init_config(_snap())['refresh_cooldown'], POLL_FAST)
+
+    def test_every_provider_has_its_colour(self):
+        secondary = [('codex', _secondary_snapshot_to_dict(_snap())), ('kimi', _secondary_snapshot_to_dict(_snap()))]
+        colors = [entry['color'] for entry in _init_config(_snap(), secondary=secondary)['providers']]
+
+        self.assertEqual(colors, [PROVIDER_COLORS['claude'], PROVIDER_COLORS['codex'], PROVIDER_COLORS['kimi']])
+
+    def test_claude_bars_use_the_claude_outlooks(self):
+        usage = {'five_hour': {'utilization': 50, 'resets_at': '2026-01-01T05:00:00Z'}}
+        config = _init_config(_snap(usage=usage), outlooks={'claude': {'five_hour': _outlook('tight', forecast=92.0)}})
+
+        self.assertEqual(config['providers'][0]['data']['usage'][0]['status'], 'tight')
 
     def test_app_version(self):
         """app_version matches the package version."""
@@ -542,6 +594,26 @@ class TestInitConfig(unittest.TestCase):
         titles = [entry['install_title'] for entry in config['providers']]
         self.assertEqual(len(titles), 3)
         self.assertEqual(len(set(titles)), 3)
+
+
+class TestPopupApi(unittest.TestCase):
+    """Tests for the popup's footer buttons exposed to JavaScript."""
+
+    def setUp(self):
+        self.popup = MagicMock()
+        self.api = _PopupApi(self.popup)
+
+    def test_dashboard_button_opens_the_dashboard_and_closes_the_popup(self):
+        self.api.open_dashboard()
+
+        self.popup.app.on_open_dashboard.assert_called_once_with()
+        self.popup._close.assert_called_once_with()
+
+    def test_refresh_button_asks_the_app_for_fresh_data(self):
+        self.api.refresh()
+
+        self.popup.app.refresh_now.assert_called_once_with()
+        self.popup._close.assert_not_called()
 
 
 class TestSecondarySnapshotToDict(unittest.TestCase):

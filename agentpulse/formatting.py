@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import locale as _locale
+import math
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import settings as _settings
 from .i18n import T
 from .settings import CURRENCY_SYMBOL, PROVIDER_LABELS, _SYSTEM_CURRENCY_SYMBOL
 
+if TYPE_CHECKING:
+    from .forecast import Outlook
+
 __all__ = [
     'PERIOD_5H', 'PERIOD_7D',
-    'burn_rate_info', 'elapsed_pct', 'expand_popup_fields', 'field_period',
-    'format_burn_text', 'format_credits', 'format_tooltip',
+    'countdown_label', 'elapsed_pct', 'expand_popup_fields', 'field_period', 'field_sort_key',
+    'format_clock', 'format_credits', 'format_outlook', 'format_tooltip',
     'midnight_positions', 'parse_field_name', 'period_to_field_name', 'popup_label',
     'time_until', 'tooltip_label',
 ]
@@ -117,7 +121,8 @@ def period_to_field_name(seconds: int) -> str | None:
     return None
 
 
-def _field_order(field: str) -> tuple[int, int, int, str]:
+def field_sort_key(field: str) -> tuple[int, int, int, str]:
+    """Display order of quota fields: sessions before multi-day windows, shorter first, base before variants."""
     parsed = parse_field_name(field)
     if parsed is None:
         return 2, 0, 0, field
@@ -136,7 +141,7 @@ def expand_popup_fields(popup_fields: list[str], usage_data: dict[str, Any]) -> 
     seen: set[str] = set()
     for field in popup_fields:
         if field == '*':
-            fields = sorted((name for name in available if name not in seen), key=_field_order)
+            fields = sorted((name for name in available if name not in seen), key=field_sort_key)
         else:
             fields = [field] if field in available and field not in seen else []
         for name in fields:
@@ -164,71 +169,49 @@ def elapsed_pct(resets_at: str, period_seconds: int) -> float | None:
     return max(0.0, min(100.0, elapsed / period_seconds * 100.0))
 
 
-def burn_rate_info(utilization: float, resets_at: str, period_seconds: int | None) -> dict[str, Any] | None:
-    """Describe the average pace of the current quota window.
+def format_outlook(outlook: Outlook, *, now: float | None = None) -> str:
+    """Return the short status text of a quota outlook, e.g. ``'Tight'`` or ``'Limit ~15:47'``.
 
     Parameters
     ----------
-    utilization
-        Current usage in percent.
-    resets_at
-        ISO timestamp of the window's reset.
-    period_seconds
-        Window length (e.g. five hours for ``five_hour``).
-
-    Returns
-    -------
-    dict or None
-        None without a usable reset time or before the window has started.
-        Otherwise ``time_pct`` (elapsed share of the window), ``burn_per_hour``,
-        ``eta_seconds`` (time until 100% at the current pace, or None when the
-        window resets first), ``healthy`` (usage not ahead of elapsed time)
-        and ``pace_delta``.
+    outlook
+        The quota's outlook (see :mod:`agentpulse.forecast`).
+    now
+        Current time as a Unix timestamp, for the day of a limit time;
+        defaults to the current time.
     """
-    if not resets_at or not period_seconds or period_seconds <= 0:
-        return None
-    try:
-        reset = _parse_time(resets_at)
-        if reset.tzinfo is None:
-            return None
-        remaining = max(0.0, (reset - datetime.now(timezone.utc)).total_seconds())
-    except Exception:
-        return None
-    elapsed = max(0.0, period_seconds - remaining)
-    if elapsed <= 0:
-        return None
-    time_pct = max(0.0, min(100.0, elapsed / period_seconds * 100.0))
-    hourly = utilization / (elapsed / 3600.0)
-    eta = None
-    if 0 < utilization < 100 and hourly > 0:
-        seconds_to_limit = (100.0 - utilization) / hourly * 3600.0
-        # Past the reset the window starts over, so there is nothing to count down to.
-        if seconds_to_limit < remaining:
-            eta = seconds_to_limit
-    return {
-        'time_pct': time_pct,
-        'burn_per_hour': hourly,
-        'eta_seconds': eta,
-        'healthy': utilization <= time_pct,
-        'pace_delta': utilization - time_pct,
-    }
+    if outlook.status == 'blocked':
+        return T['status_blocked']
+    if outlook.status == 'limit':
+        if outlook.limit_at is None:
+            return T['status_limit']
+        return T['status_limit_at'].format(clock=format_clock(outlook.limit_at, now=now))
+    if outlook.status == 'tight':
+        return T['status_tight']
+    return T['status_ok']
 
 
-def _duration_short(seconds: float) -> str:
-    minutes = max(1, int(seconds / 60))
+def countdown_label(seconds: float) -> str:
+    """Return the time left for the tray icon: minutes below an hour (``'47'``), then hours (``'5h'``), then days (``'2d'``)."""
+    minutes = max(1, math.ceil(seconds / 60))
     if minutes < 60:
-        return T['duration_m'].format(m=minutes)
-    return T['duration_hm'].format(h=minutes // 60, m=minutes % 60)
+        return str(minutes)
+    hours = max(1, int(seconds // 3600))
+    if hours < 24:
+        return T['icon_hours'].format(h=hours)
+    return T['icon_days'].format(d=int(seconds // 86400))
 
 
-def format_burn_text(utilization: float, resets_at: str, period_seconds: int | None) -> str:
-    info = burn_rate_info(utilization, resets_at, period_seconds)
-    if info is None:
-        return ''
-    pace = T.get('pace_healthy', 'on pace') if info['healthy'] else T.get('pace_ahead', 'ahead of pace')
-    if info['eta_seconds'] is None:
-        return pace
-    return T.get('burn_eta', 'ETA {duration} - {pace}').format(duration=_duration_short(info['eta_seconds']), pace=pace)
+def format_clock(ts: float, *, now: float | None = None) -> str:
+    """Return a local ``HH:MM`` for today, ``tomorrow HH:MM`` or ``Weekday HH:MM`` for later days."""
+    moment = datetime.fromtimestamp(ts)
+    today = datetime.fromtimestamp(now).date() if now is not None else datetime.now().date()
+    clock = moment.strftime('%H:%M')
+    if moment.date() == today:
+        return clock
+    if moment.date() == today + timedelta(days=1):
+        return T['clock_tomorrow'].format(clock=clock)
+    return T['clock_weekday'].format(day=T['weekdays'][moment.weekday()], clock=clock)
 
 
 def midnight_positions(resets_at: str, period_seconds: int) -> list[float]:
@@ -296,7 +279,7 @@ def format_credits(cents: float) -> str:
     return rendered
 
 
-def _format_provider_lines(data: dict[str, Any]) -> list[str]:
+def _format_provider_lines(data: dict[str, Any], outlooks: dict[str, Outlook]) -> list[str]:
     lines: list[str] = []
     for key in _settings.TOOLTIP_FIELDS:
         item = data.get(key)
@@ -304,12 +287,12 @@ def _format_provider_lines(data: dict[str, Any]) -> list[str]:
             continue
         pct = f"{item.get('utilization', 0):.0f}%"
         line = f'{tooltip_label(key)}: {pct}'
-        reset = time_until(item.get('resets_at', ''))
+        reset = time_until(item.get('resets_at', '') or '')
         if reset:
             line += f' ({reset})'
-        burn = format_burn_text(item.get('utilization', 0), item.get('resets_at', ''), field_period(key))
-        if burn:
-            line += f' - {burn}'
+        outlook = outlooks.get(key)
+        if outlook is not None:
+            line += f' - {format_outlook(outlook)}'
         lines.append(line)
     return lines
 
@@ -340,7 +323,11 @@ def _secondary_heading(name: str) -> str:
     return T.get(f'tooltip_title_{name}', fallback)
 
 
-def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, Any]]] | None = None) -> str:
+def format_tooltip(
+    data: dict[str, Any],
+    secondary: list[tuple[str, dict[str, Any]]] | None = None,
+    outlooks: dict[str, dict[str, Outlook]] | None = None,
+) -> str:
     """Render tooltip text within the Windows tray's 128-character limit.
 
     Parameters
@@ -350,14 +337,18 @@ def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, An
     secondary
         Additional providers as ``(provider_name, usage_data)`` pairs (e.g.
         ``('codex', {...})``), rendered in order below the Claude section.
+    outlooks
+        Quota outlooks per provider and field; each field's status text
+        follows its line when given.
 
-    When the verbose per-field lines (reset time, burn rate) for every
-    active provider fit within the limit, they are shown in full - this is
-    the common case with the default one or two tooltip fields.  When they
+    When the verbose per-field lines (reset time, status) for every active
+    provider fit within the limit, they are shown in full - this is the
+    common case with the default one or two tooltip fields.  When they
     don't (more providers, more configured fields), every provider is
     compacted onto a single summary line instead of the providers listed
     last being silently dropped.
     """
+    provider_outlooks = outlooks or {}
     others = secondary or []
     healthy = [(name, entry) for name, entry in others if entry and 'error' not in entry]
     if 'error' in data and not healthy:
@@ -377,7 +368,7 @@ def format_tooltip(data: dict[str, Any], secondary: list[tuple[str, dict[str, An
     for name, entry in sections:
         if name:
             verbose_lines.append(_secondary_heading(name))
-        verbose_lines.extend(_format_provider_lines(entry))
+        verbose_lines.extend(_format_provider_lines(entry, provider_outlooks.get(name or 'claude', {})))
     text = '\n'.join(verbose_lines)
     if len(text) <= 128 or len(sections) <= 1:
         return _trim_to_line_boundary(text)

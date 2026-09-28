@@ -66,7 +66,7 @@
 <script>
 const COLORS = {
     bg: '#1e1e1e', fg: '#cccccc', fg_dim: '#888888', fg_heading: '#ffffff', fg_link: '#4a9eff',
-    bar_bg: '#333333', bar_fg: '#4a9eff', bar_fg_warn: '#e05050', bar_divider: '#000c', bar_marker: '#fffc',
+    bar_bg: '#333333', bar_fg: '#4a9eff', bar_fg_tight: '#e8b339', bar_fg_warn: '#e05050', bar_divider: '#000c', bar_marker: '#fffc',
 };
 const T = {
     title: 'Agents Pulse', account: 'ACCOUNT', email: 'Email', plan: 'Plan',
@@ -74,20 +74,21 @@ const T = {
     status_updated_s: 'Updated {s}s ago', status_updated: 'Updated {duration} ago',
     status_next_update: 'Next update in {duration}', status_refreshing: 'Refreshing...',
     duration_hm: '{h}h {m}m', duration_m: '{m}m', duration_s: '{s}s',
+    open_dashboard: 'Dashboard', refresh: 'Refresh', refresh_fresh: 'Up to date - refreshes once the data is {duration} old',
 };
 
 const PRESETS = {
     full: {
         profile: { email: 'user@example.com', plan: 'Max (Team)' },
         usage: [
-            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42, warn: false,
-              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35 },
-            { label: 'Weekly (7 day)', pct_text: '65%', fill_pct: 0.65, warn: true,
-              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
-            { label: 'Weekly (Sonnet)', pct_text: '30%', fill_pct: 0.30, warn: false,
-              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
-            { label: 'Weekly (Opus)', pct_text: '12%', fill_pct: 0.12, warn: false,
-              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55 },
+            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42,
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35) },
+            { label: 'Weekly (7 day)', pct_text: '65%', fill_pct: 0.65,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55, ...statusFor(65, 0.55) },
+            { label: 'Weekly (Sonnet)', pct_text: '30%', fill_pct: 0.30,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55, ...statusFor(30, 0.55) },
+            { label: 'Weekly (Opus)', pct_text: '12%', fill_pct: 0.12,
+              reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55, ...statusFor(12, 0.55) },
         ],
         extra: { pct_text: '23%', fill_pct: 0.23, spent_text: '$4.60 / $20.00 spent' },
         installations: [
@@ -100,8 +101,8 @@ const PRESETS = {
     minimal: {
         profile: null,
         usage: [
-            { label: 'Session (5hr)', pct_text: '10%', fill_pct: 0.10, warn: false,
-              reset_text: 'Resets in 4h 50m (17:00)', midnights: [], marker_rel: 0.03 },
+            { label: 'Session (5hr)', pct_text: '10%', fill_pct: 0.10,
+              reset_text: 'Resets in 4h 50m (17:00)', midnights: [], marker_rel: 0.03, ...statusFor(10, 0.03) },
         ],
         extra: null,
         installations: [],
@@ -110,10 +111,10 @@ const PRESETS = {
     error: {
         profile: { email: 'user@example.com', plan: 'Max' },
         usage: [
-            { label: 'Session (5hr)', pct_text: '95%', fill_pct: 0.95, warn: true,
-              reset_text: 'Resets in 12m (12:12)', midnights: [], marker_rel: 0.96 },
-            { label: 'Weekly (7 day)', pct_text: '88%', fill_pct: 0.88, warn: true,
-              reset_text: 'Resets tomorrow, 08:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.80 },
+            { label: 'Session (5hr)', pct_text: '95%', fill_pct: 0.95,
+              reset_text: 'Resets in 12m (12:12)', midnights: [], marker_rel: 0.96, ...statusFor(95, 0.96) },
+            { label: 'Weekly (7 day)', pct_text: '88%', fill_pct: 0.88,
+              reset_text: 'Resets tomorrow, 08:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.80, ...statusFor(88, 0.80) },
         ],
         extra: null,
         installations: [{ name: 'CLI', version: '2.1.69' }],
@@ -122,8 +123,8 @@ const PRESETS = {
     refreshing: {
         profile: { email: 'user@example.com', plan: 'Max (Team)' },
         usage: [
-            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42, warn: false,
-              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35 },
+            { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42,
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35) },
         ],
         extra: null,
         installations: [{ name: 'CLI', version: '2.1.69' }],
@@ -148,14 +149,14 @@ function resolvePreset(name) {
 // Stub pywebview.api so popup.js doesn't throw
 function providerList(name) {
     return [
-        { id: 'claude', label: 'Claude', install_title: 'CLAUDE CODE', data: resolvePreset(name) },
-        { id: 'codex', label: 'Codex', install_title: 'CODEX CLI', data: resolveSecondaryPreset(name, 17, 48, '0.9.0') },
-        { id: 'kimi', label: 'Kimi', install_title: 'KIMI CLI', data: resolveSecondaryPreset(name, 62, 24, '2.0.1') },
+        { id: 'claude', label: 'Claude', color: '#3987e5', install_title: 'CLAUDE CODE', data: resolvePreset(name) },
+        { id: 'codex', label: 'Codex', color: '#199e70', install_title: 'CODEX CLI', data: resolveSecondaryPreset(name, 17, 48, '0.9.0') },
+        { id: 'kimi', label: 'Kimi', color: '#d95926', install_title: 'KIMI CLI', data: resolveSecondaryPreset(name, 62, 24, '2.0.1') },
     ];
 }
 
 function applyPreset(name) {
-    win().init({ colors: COLORS, t: T, app_version: '1.13.0', popup_settings: {}, providers: providerList(name) });
+    win().init({ colors: COLORS, t: T, app_version: '1.13.0', popup_settings: {}, refresh_cooldown: 120, providers: providerList(name) });
 }
 
 let initialized = false;
@@ -177,7 +178,7 @@ function randomize() {
         const pct = Math.round(Math.random() * 100);
         entry.fill_pct = pct / 100;
         entry.pct_text = pct + '%';
-        entry.warn = entry.marker_rel !== null && pct / 100 > entry.marker_rel;
+        Object.assign(entry, statusFor(pct, entry.marker_rel));
     }
     if (data.extra) {
         const pct = Math.round(Math.random() * 100);
@@ -189,6 +190,19 @@ function randomize() {
     win().updateProviders(providers);
 }
 
+// Mirrors the app's three states with a plain pace projection, for previews only.
+function statusFor(pct, markerRel) {
+    const elapsed = Math.max(0.05, markerRel ?? 0.5);
+    const forecast = pct >= 100 ? 100 : Math.min(100, pct / elapsed);
+    const status = pct >= 100 ? 'blocked' : forecast >= 100 ? 'limit' : forecast >= 90 ? 'tight' : 'ok';
+    const text = { ok: 'On track', tight: 'Tight', limit: 'Limit ~15:47', blocked: 'Limit reached' }[status];
+    return {
+        status, status_text: text, forecast_pct: forecast / 100,
+        forecast_text: status === 'ok' || status === 'tight' ? `~${Math.round(forecast)}%` : '',
+        forecast_title: status === 'ok' || status === 'tight' ? `~${Math.round(forecast)}% at reset` : '',
+    };
+}
+
 function resolveSecondaryPreset(name, sessionPct, weeklyPct, cliVersion) {
     const data = resolvePreset(name === 'error' ? 'minimal' : 'full');
     data.profile = null;
@@ -196,14 +210,14 @@ function resolveSecondaryPreset(name, sessionPct, weeklyPct, cliVersion) {
     data.installations = [{ name: 'CLI', version: cliVersion }];
     data.usage = data.usage.slice(0, 2).map((entry, index) => {
         const pct = index === 0 ? sessionPct : weeklyPct;
-        return { ...entry, pct_text: pct + '%', fill_pct: pct / 100, warn: false };
+        return { ...entry, pct_text: pct + '%', fill_pct: pct / 100, ...statusFor(pct, entry.marker_rel) };
     });
     return data;
 }
 
 // First load: inject pywebview stub, then apply the preset from the URL hash
 iframe.addEventListener('load', () => {
-    win().pywebview = { api: { close() {}, open_url() {}, report_height(h) {
+    win().pywebview = { api: { close() {}, open_url() {}, open_dashboard() {}, refresh() {}, save_popup_settings() {}, report_height(h) {
         iframe.style.height = h + 'px';
         iframe.style.visibility = 'visible';
     }}};

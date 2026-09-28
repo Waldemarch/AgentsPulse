@@ -4,10 +4,12 @@ let providers = {};
 let providerOrder = [];
 let providerLabels = {};
 let providerInstallTitles = {};
+let providerColors = {};
 let selectedTab = 'all';
 let statusTimer = null;
 let statusModel = {};
 let popupSettings = { show_install_section: false, email_display: 'show' };
+let refreshCooldown = 0;
 
 function byId(id) {
   return document.getElementById(id);
@@ -18,6 +20,7 @@ function init(config) {
   strings = config.t;
   bindStaticText(config);
   bindNodes();
+  refreshCooldown = config.refresh_cooldown || 0;
   setProviders(config.providers || []);
   bindActions(providerOrder.length > 1);
   applyPopupSettings(config.popup_settings || {});
@@ -47,6 +50,9 @@ function bindStaticText(config) {
   byId('segShow').textContent = strings.email_show;
   byId('segBlur').textContent = strings.email_blur;
   byId('segHide').textContent = strings.email_hide;
+  byId('dashboardBtn').textContent = `${strings.open_dashboard} \u2197`;
+  byId('refreshBtn').setAttribute('aria-label', strings.refresh);
+  byId('refreshBtn').title = strings.refresh;
 }
 
 function bindNodes() {
@@ -72,6 +78,7 @@ function bindNodes() {
     settingsBtn: byId('settingsBtn'),
     toggleInstall: byId('toggleInstall'),
     emailDisplayControl: byId('emailDisplayControl'),
+    refreshBtn: byId('refreshBtn'),
   };
 }
 
@@ -79,11 +86,13 @@ function setProviders(list) {
   providerOrder = list.map((entry) => entry.id);
   providerLabels = {};
   providerInstallTitles = {};
+  providerColors = {};
   providers = {};
   list.forEach((entry) => {
     providers[entry.id] = entry.data;
     providerLabels[entry.id] = entry.label;
     providerInstallTitles[entry.id] = entry.install_title;
+    providerColors[entry.id] = entry.color;
   });
   if (selectedTab !== 'all' && !providerOrder.includes(selectedTab)) selectedTab = 'all';
 }
@@ -105,6 +114,12 @@ function buildTabs() {
 function bindActions(multipleProviders) {
   byId('closeBtn').addEventListener('click', () => pywebview.api.close());
   byId('changelogLink').addEventListener('click', () => pywebview.api.open_url());
+  byId('dashboardBtn').addEventListener('click', () => pywebview.api.open_dashboard());
+  nodes.refreshBtn.addEventListener('click', () => {
+    if (nodes.refreshBtn.disabled) return;
+    nodes.refreshBtn.disabled = true;
+    pywebview.api.refresh();
+  });
   nodes.settingsBtn.addEventListener('click', toggleSettingsPanel);
   nodes.toggleInstall.addEventListener('change', () => {
     saveSetting('show_install_section', nodes.toggleInstall.checked);
@@ -181,7 +196,7 @@ function combinedData() {
   for (let index = 0; index < count; index += 1) {
     providerOrder.forEach((id, position) => {
       const entry = lists[position][index];
-      if (entry) usage.push({ ...entry, provider: providerLabels[id], label: entry.label });
+      if (entry) usage.push({ ...entry, provider: providerLabels[id], color: providerColors[id], label: entry.label });
     });
   }
   const status = providerOrder.reduce(
@@ -302,6 +317,17 @@ function tickStatus() {
     if (wait > 0) parts.push(strings.status_next_update.replace('{duration}', countdown(wait)));
   }
   nodes.statusText.textContent = parts.join(' \u00b7 ');
+  updateRefreshButton(age);
+}
+
+// The app skips providers updated within the cooldown, so the button waits
+// until a refresh would fetch something.
+function updateRefreshButton(age) {
+  const fresh = statusModel.refreshing || age < refreshCooldown;
+  nodes.refreshBtn.disabled = fresh;
+  nodes.refreshBtn.title = fresh && !statusModel.refreshing
+    ? strings.refresh_fresh.replace('{duration}', countdown(refreshCooldown))
+    : strings.refresh;
 }
 
 function durationSince(seconds) {
@@ -328,49 +354,68 @@ function countdown(seconds) {
 function makeBar(entry) {
   const wrapper = document.createElement('div');
   wrapper.className = 'usage-entry';
-  wrapper.classList.toggle('warn', entry.warn);
   const header = document.createElement('div');
   header.className = 'bar-header';
   const labelWrap = document.createElement('span');
   labelWrap.className = 'bar-label';
+  const dot = document.createElement('span');
+  dot.className = 'provider-dot';
   const provider = document.createElement('span');
-  provider.className = 'provider-badge';
+  provider.className = 'provider-name';
   const label = document.createElement('span');
+  label.className = 'field-label';
+  labelWrap.append(dot, provider, label);
   const percent = document.createElement('span');
   percent.className = 'bar-pct';
-  provider.textContent = entry.provider || '';
-  provider.classList.toggle('hidden', !entry.provider);
-  label.textContent = entry.label;
-  labelWrap.append(provider, label);
-  percent.textContent = entry.pct_text;
   header.append(labelWrap, percent);
   const track = document.createElement('div');
   track.className = 'bar-container';
   const fill = document.createElement('div');
   fill.className = 'bar-fill';
-  fill.classList.toggle('warn', entry.warn);
   fill.style.width = '0%';
-  track.append(fill);
-  addMarkers(track, entry);
-  wrapper.append(header, track);
-  setResetText(wrapper, entry);
+  const forecast = document.createElement('div');
+  forecast.className = 'bar-forecast';
+  track.append(fill, forecast);
+  const footer = document.createElement('div');
+  footer.className = 'bar-footer';
+  const chip = document.createElement('span');
+  chip.className = 'chip';
+  const detail = document.createElement('span');
+  detail.className = 'reset-text';
+  footer.append(chip, detail);
+  wrapper.append(header, track, footer);
+  updateBar(wrapper, entry, true);
   return wrapper;
 }
 
-function updateBar(wrapper, entry) {
-  wrapper.classList.toggle('warn', entry.warn);
-  const provider = wrapper.querySelector('.provider-badge');
-  provider.textContent = entry.provider || '';
+function updateBar(wrapper, entry, fresh = false) {
+  const status = entry.status || 'ok';
+  wrapper.className = `usage-entry status-${status}`;
+  const dot = wrapper.querySelector('.provider-dot');
+  const provider = wrapper.querySelector('.provider-name');
+  dot.classList.toggle('hidden', !entry.provider);
   provider.classList.toggle('hidden', !entry.provider);
-  wrapper.querySelector('.bar-label span:last-child').textContent = entry.label;
+  dot.style.background = entry.color || 'var(--fg-dim)';
+  provider.textContent = entry.provider || '';
+  wrapper.querySelector('.field-label').textContent = entry.label;
   wrapper.querySelector('.bar-pct').textContent = entry.pct_text;
   const fill = wrapper.querySelector('.bar-fill');
-  fill.style.width = `${entry.fill_pct * 100}%`;
-  fill.classList.toggle('warn', entry.warn);
+  if (!fresh) fill.style.width = `${entry.fill_pct * 100}%`;
+  // The lighter segment runs from today's usage to the forecast at the reset.
+  const forecast = wrapper.querySelector('.bar-forecast');
+  const ahead = entry.forecast_pct === null || entry.forecast_pct === undefined ? 0 : Math.max(0, entry.forecast_pct - entry.fill_pct);
+  forecast.classList.toggle('hidden', ahead < 0.005);
+  forecast.style.left = `${entry.fill_pct * 100}%`;
+  forecast.style.width = `${ahead * 100}%`;
   const track = wrapper.querySelector('.bar-container');
   track.querySelectorAll('.bar-divider,.bar-marker').forEach((node) => node.remove());
   addMarkers(track, entry);
-  setResetText(wrapper, entry);
+  const chip = wrapper.querySelector('.chip');
+  chip.textContent = [entry.status_text, entry.forecast_text].filter(Boolean).join(' \u00b7 ');
+  chip.title = entry.forecast_title || '';
+  chip.classList.toggle('hidden', !entry.status_text);
+  wrapper.querySelector('.reset-text').textContent = entry.reset_text || '';
+  wrapper.querySelector('.bar-footer').classList.toggle('hidden', !entry.status_text && !entry.reset_text);
 }
 
 function addMarkers(track, entry) {
@@ -386,23 +431,6 @@ function addMarkers(track, entry) {
     marker.style.left = `calc(${entry.marker_rel * 100}% - 1px)`;
     track.append(marker);
   }
-}
-
-function setResetText(wrapper, entry) {
-  const text = entry.reset_text && entry.burn_text
-    ? `${entry.reset_text} \u00b7 ${entry.burn_text}`
-    : (entry.reset_text || entry.burn_text || '');
-  let node = wrapper.querySelector('.reset-text');
-  if (!text) {
-    if (node) node.remove();
-    return;
-  }
-  if (!node) {
-    node = document.createElement('div');
-    node.className = 'reset-text';
-    wrapper.append(node);
-  }
-  node.textContent = text;
 }
 
 new ResizeObserver(() => {

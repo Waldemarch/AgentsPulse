@@ -2,6 +2,35 @@ const RANGE_SECONDS = { '24h': 24 * 3600, '7d': 7 * 24 * 3600, '30d': 30 * 24 * 
 // Readings whose reset times differ by less than this belong to one quota
 // cycle: the APIs repeat the same reset with a few seconds of jitter.
 const RESET_TOLERANCE_SECONDS = 10 * 60;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SEVERITY = { ok: 0, tight: 1, limit: 2, blocked: 3 };
+const HOUR = 3600;
+const DAY = 24 * HOUR;
+
+// ---------- DOM helpers ----------
+
+// Builds an element from attributes and children.  Colours and sizes are set
+// through the CSSOM by the callers: the Content-Security-Policy ignores
+// style attributes written into markup.
+function build(namespace, tag, attrs, children) {
+    const node = namespace ? document.createElementNS(namespace, tag) : document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+        if (value === null || value === undefined || value === false) continue;
+        if (key === 'text') node.textContent = String(value);
+        else if (key === 'class') node.setAttribute('class', value);
+        else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
+        else node.setAttribute(key, value === true ? '' : String(value));
+    }
+    for (const child of children.flat(Infinity)) {
+        if (child === null || child === undefined || child === false) continue;
+        node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+}
+
+const h = (tag, attrs, ...children) => build(null, tag, attrs, children);
+const s = (tag, attrs, ...children) => build(SVG_NS, tag, attrs, children);
+const byId = (id) => document.getElementById(id);
 
 function themeColor(name, fallback) {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -13,6 +42,25 @@ function themeColor(name, fallback) {
 function providerColor(provider) {
     return themeColor(`--series-${provider}`, '') || themeColor('--series-other', '#898781');
 }
+
+function readStored(key, fallback) {
+    try {
+        const value = localStorage.getItem(key);
+        return value === null ? fallback : JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
+
+function writeStored(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+        // Storage can be unavailable (private windows); the choice then lasts for this page only.
+    }
+}
+
+// ---------- Session token and requests ----------
 
 // Per-run session token passed by the tray app in the URL; required for POST
 // endpoints so pages from other origins cannot forge settings or test-event
@@ -42,9 +90,17 @@ async function postJson(path, payload) {
     return response.json();
 }
 
-// historyKey identifies the loaded history (range plus the latest reading of
-// every provider), so history is downloaded again only when it changed.
-let state = { status: null, history: null, range: '24h', historyKey: '' };
+async function fetchJson(path) {
+    const response = await fetch(path, { cache: 'no-store' });
+    if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+    }
+    return response.json();
+}
+
+// ---------- Translations ----------
 
 // Localized strings fetched from /api/i18n; empty until loadI18n() resolves,
 // so every lookup falls back to the English text baked into the markup.
@@ -61,7 +117,7 @@ function fmt(template, vars) {
 
 async function loadI18n() {
     try {
-        t = await fetch('/api/i18n', { cache: 'no-store' }).then(r => r.json());
+        t = await fetch('/api/i18n', { cache: 'no-store' }).then((response) => response.json());
     } catch {
         t = {};
     }
@@ -69,48 +125,113 @@ async function loadI18n() {
 }
 
 function applyI18n() {
-    for (const el of document.querySelectorAll('[data-i18n]')) {
-        const value = t[el.dataset.i18n];
-        if (value !== undefined) el.textContent = value;
+    for (const node of document.querySelectorAll('[data-i18n]')) {
+        const value = t[node.dataset.i18n];
+        if (value !== undefined) node.textContent = value;
+    }
+    for (const node of document.querySelectorAll('[data-i18n-label]')) {
+        const value = t[node.dataset.i18nLabel];
+        if (value !== undefined) node.setAttribute('aria-label', value);
     }
 }
 
-const rangeSelect = document.getElementById('rangeSelect');
-const exportCsv = document.getElementById('exportCsv');
+// ---------- Formatting ----------
 
-rangeSelect.addEventListener('change', () => {
-    state.range = rangeSelect.value;
-    state.historyKey = '';
-    exportCsv.href = `/api/history.csv?range=${encodeURIComponent(state.range)}`;
-    refresh();
-});
+const pct = (value) => `${Math.round(value)}%`;
+const pad = (value) => String(value).padStart(2, '0');
 
-async function fetchJson(path) {
-    const response = await fetch(path, { cache: 'no-store' });
-    if (!response.ok) {
-        const error = new Error(`HTTP ${response.status}`);
-        error.status = response.status;
-        throw error;
-    }
-    return response.json();
+function decimal(value, digits = 1) {
+    return Number(value).toLocaleString([], { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
+
+// Monday-first weekday names from the app's language, so the dashboard reads
+// like the tray even when the browser uses another language.
+function weekdayName(date) {
+    const index = (date.getDay() + 6) % 7;
+    return tr(`weekday_${index}`, date.toLocaleDateString([], { weekday: 'short' }));
+}
+
+function clock(ts) {
+    const date = new Date(ts * 1000);
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function startOfDay(ts) {
+    const date = new Date(ts * 1000);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime() / 1000;
+}
+
+function whenText(ts, now = Date.now() / 1000) {
+    const days = Math.round((startOfDay(ts) - startOfDay(now)) / DAY);
+    if (days === 0) return clock(ts);
+    if (days === 1) return fmt(tr('clock_tomorrow', 'tomorrow {clock}'), { clock: clock(ts) });
+    return fmt(tr('clock_weekday', '{day} {clock}'), { day: weekdayName(new Date(ts * 1000)), clock: clock(ts) });
+}
+
+function durationText(seconds) {
+    const minutes = Math.max(1, Math.round(seconds / 60));
+    if (minutes < 60) return fmt(tr('duration_m', '{m}m'), { m: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours >= 48) return fmt(tr('duration_dh', '{d}d {h}h'), { d: Math.floor(hours / 24), h: hours % 24 });
+    return fmt(tr('duration_hm', '{h}h {m}m'), { h: hours, m: minutes % 60 });
+}
+
+function countdownText(seconds) {
+    seconds = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
+}
+
+function formatUpdated(ts) {
+    if (!ts) return tr('waiting', 'waiting');
+    return fmt(tr('ago', '{duration} ago'), { duration: durationText(Date.now() / 1000 - ts) });
+}
+
+// ---------- State ----------
+
+// historyKey identifies the loaded history (range plus the latest reading of
+// every provider), so history is downloaded again only when it changed.
+const state = {
+    status: null,
+    history: null,
+    range: readStored('agentpulse-range', '24h'),
+    historyKey: '',
+    hidden: new Set(readStored('agentpulse-hidden-series', [])),
+    heatProvider: readStored('agentpulse-heat-provider', null),
+};
+if (!RANGE_SECONDS[state.range]) state.range = '24h';
+
+function providers() {
+    return (state.status && state.status.providers) || [];
+}
+
+function providerLabel(id) {
+    const provider = providers().find((entry) => entry.id === id);
+    return provider ? provider.label : id;
+}
+
+function providerRank(id) {
+    const index = providers().findIndex((entry) => entry.id === id);
+    return index < 0 ? providers().length : index;
+}
+
+// ---------- Refresh ----------
 
 function setConnectionError(error) {
-    const banner = document.getElementById('connectionError');
+    const banner = byId('connectionError');
     if (!error) {
         banner.hidden = true;
         return;
     }
-    const key = error.status === 403 ? 'session_expired' : 'connection_lost';
-    const fallback = error.status === 403
-        ? 'session expired - reopen the dashboard from the tray menu'
-        : 'Connection lost - retrying';
-    banner.textContent = tr(key, fallback);
+    const expired = error.status === 403;
+    banner.textContent = expired
+        ? tr('session_expired', 'session expired - reopen the dashboard from the tray menu')
+        : tr('connection_lost', 'Connection lost - retrying');
     banner.hidden = false;
 }
 
 function historyKey(status) {
-    const readings = (status.providers || []).map(provider => `${provider.id}:${provider.last_success_time || ''}`);
+    const readings = (status.providers || []).map((provider) => `${provider.id}:${provider.last_success_time || ''}`);
     return `${state.range}|${readings.join(',')}`;
 }
 
@@ -127,7 +248,8 @@ async function refresh() {
             if (state.range !== range) return;
             state.historyKey = key;
         }
-        state = { ...state, status, history: loaded };
+        state.status = status;
+        state.history = loaded;
         setConnectionError(null);
         render();
     } catch (error) {
@@ -135,153 +257,281 @@ async function refresh() {
     }
 }
 
-async function loadSettings() {
-    let data;
-    try {
-        const response = await fetch('/api/settings', { cache: 'no-store', headers: { 'X-AgentsPulse-Token': authToken } });
-        if (!response.ok) return;
-        data = await response.json();
-    } catch {
-        return;
-    }
-    const s = data.settings || {};
-    document.getElementById('autostartEnabled').checked = !!s.autostart;
-    document.getElementById('codexEnabled').checked = !!s.codex_enabled;
-    document.getElementById('kimiEnabled').checked = !!s.kimi_enabled;
-    document.getElementById('tooltipFields').value = (s.tooltip_fields || []).join(', ');
-    document.getElementById('thresholdClaude5h').value = (s.alert_thresholds_five_hour || []).join(', ');
-    document.getElementById('thresholdClaude7d').value = (s.alert_thresholds_seven_day || []).join(', ');
-    document.getElementById('thresholdCodex5h').value = (s.alert_thresholds_codex_five_hour || []).join(', ');
-    document.getElementById('thresholdCodex7d').value = (s.alert_thresholds_codex_seven_day || []).join(', ');
-    document.getElementById('thresholdKimi5h').value = (s.alert_thresholds_kimi_five_hour || []).join(', ');
-    document.getElementById('thresholdKimi7d').value = (s.alert_thresholds_kimi_seven_day || []).join(', ');
-    document.getElementById('predictionEnabled').checked = s.prediction_enabled !== false;
-    document.getElementById('predictionDayEnd').value = s.prediction_day_end_time || '18:00';
-    document.getElementById('heatmapEnabled').checked = s.heatmap_enabled !== false;
-    document.getElementById('quietHoursEnabled').checked = !!s.quiet_hours_enabled;
-    document.getElementById('quietHoursStart').value = s.quiet_hours_start || '22:00';
-    document.getElementById('quietHoursEnd').value = s.quiet_hours_end || '08:00';
-    // One command per line: each runs on its own, exactly like the array in the settings file.
-    document.getElementById('resetCommand').value = (s.on_reset_command || []).join('\n');
-    document.getElementById('thresholdCommand').value = (s.on_threshold_command || []).join('\n');
-}
-
 function render() {
     if (!state.status || !state.history) return;
-    const rows = state.history.rows || [];
-    renderProviders(state.status.providers || []);
-    renderDiagnostics(state.status);
+    safely(renderSummary, 'summary');
+    safely(renderNow, 'nowGrid');
     renderCharts();
-    renderPredictions(state.status);
-    renderHeatmap(rows, state.history.fields || {}, state.status);
-    document.getElementById('historyMeta').textContent = fmt(tr('rows', '{count} rows · {range}'), { count: rows.length, range: state.history.range || state.range });
+    safely(renderHeatmap, 'heatmapGrid');
+    safely(renderFooter, 'siteFooter');
+    tickLive();
 }
 
-function renderProviders(providers) {
-    const root = document.getElementById('providers');
-    root.replaceChildren(...providers.map(providerCard));
+function renderCharts() {
+    safely(renderLegend, 'historyLegend');
+    safely(renderHistory, 'historyChart');
+    safely(renderConsumption, 'consumptionChart');
+    if (byId('historyTable').open) safely(renderHistoryTable, 'historyTableBody');
 }
 
-function providerCard(provider) {
-    const card = document.createElement('article');
-    card.className = 'provider-card';
-
-    const title = document.createElement('div');
-    title.className = 'provider-title';
-    const name = document.createElement('h2');
-    name.textContent = provider.label;
-    const updated = document.createElement('span');
-    updated.textContent = formatUpdated(provider.last_success_time);
-    title.append(name, updated);
-    card.appendChild(title);
-
-    if (provider.error) {
-        const err = document.createElement('p');
-        err.className = 'error';
-        err.textContent = provider.error;
-        card.appendChild(err);
+// One failing widget must not blank the whole dashboard.
+function safely(renderer, containerId) {
+    try {
+        renderer();
+    } catch (error) {
+        console.error(error);
+        byId(containerId).replaceChildren(h('p', { class: 'muted', text: tr('render_failed', 'This part could not be drawn.') }));
     }
+}
 
-    const list = document.createElement('div');
-    list.className = 'usage-list';
-    for (const entry of provider.usage) list.appendChild(usageItem(entry));
-    if (!provider.usage.length && !provider.error) {
-        const empty = document.createElement('p');
-        empty.className = 'muted';
-        empty.textContent = tr('waiting_usage', 'Waiting for usage data');
-        list.appendChild(empty);
+// The header counts down to the app's next reading.
+function tickLive() {
+    const node = byId('liveStatus');
+    if (!state.status) return;
+    const next = state.status.next_poll_time;
+    const refreshing = providers().some((provider) => provider.refreshing);
+    const parts = [tr('live', 'Live')];
+    if (refreshing) parts.push(tr('status_refreshing', 'Refreshing...'));
+    else if (next && next > Date.now() / 1000) {
+        parts.push(fmt(tr('next_reading', 'next reading in {duration}'), { duration: countdownText(next - Date.now() / 1000) }));
     }
-    card.appendChild(list);
-    return card;
+    node.textContent = parts.join(' · ');
+    node.classList.add('on');
 }
 
-function usageItem(entry) {
-    const pct = Math.round(entry.utilization);
-    const item = document.createElement('div');
+// ---------- Status of a quota ----------
 
-    const row = document.createElement('div');
-    row.className = 'metric-row';
-    const label = document.createElement('span');
-    label.textContent = entry.label;
-    const value = document.createElement('strong');
-    value.textContent = `${pct}%`;
-    row.append(label, value);
-
-    const bar = document.createElement('div');
-    bar.className = 'bar';
-    const fill = document.createElement('div');
-    fill.className = pct >= 100 ? 'fill warn' : pct >= 80 ? 'fill high' : 'fill';
-    // Set through the CSSOM: the dashboard's Content-Security-Policy ignores
-    // widths written into markup.
-    fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
-    bar.appendChild(fill);
-
-    const detail = document.createElement('p');
-    detail.className = 'muted';
-    detail.textContent = metricSubtext(entry);
-
-    item.append(row, bar, detail);
-    return item;
+function outlookOf(entry) {
+    return entry.outlook || { status: entry.utilization >= 100 ? 'blocked' : 'ok', forecast_pct: null, limit_at: null, reset_at: null, day_end_pct: null };
 }
 
-function metricSubtext(entry) {
+function statusText(outlook) {
+    if (outlook.status === 'blocked') return tr('status_blocked', 'Limit reached');
+    if (outlook.status === 'limit') {
+        if (!outlook.limit_at) return tr('status_limit', 'Limit before reset');
+        return fmt(tr('status_limit_at', 'Limit ~{clock}'), { clock: whenText(outlook.limit_at) });
+    }
+    if (outlook.status === 'tight') return tr('status_tight', 'Tight');
+    return tr('status_ok', 'On track');
+}
+
+function methodNote(outlook) {
+    if (outlook.method === 'history') return fmt(tr('forecast_from_history', 'Projected from your last {n} cycles'), { n: outlook.cycles });
+    if (outlook.method === 'average') return tr('forecast_from_average', 'Projected from the average pace so far');
+    if (outlook.method === 'pace') return tr('forecast_from_pace', 'Projected from the current pace');
+    return '';
+}
+
+function statusIcon(status) {
+    const icon = s('svg', { viewBox: '0 0 16 16', width: 13, height: 13, 'aria-hidden': 'true', class: 'status-icon' });
+    if (status === 'ok') {
+        icon.append(
+            s('circle', { cx: 8, cy: 8, r: 6.6, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6 }),
+            s('path', {
+                d: 'M5 8.3l2.1 2.1 4-4.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+            }),
+        );
+    } else if (status === 'blocked') {
+        icon.append(
+            s('rect', { x: 3.5, y: 7, width: 9, height: 7, rx: 1.5, fill: 'currentColor' }),
+            s('path', { d: 'M5.5 7V5.3a2.5 2.5 0 015 0V7', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6 }),
+        );
+    } else {
+        icon.append(
+            s('path', { d: 'M8 1.9l6.5 11.5h-13z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }),
+            s('path', { d: 'M8 6.3v3.5', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round' }),
+            s('circle', { cx: 8, cy: 11.7, r: 0.95, fill: 'currentColor' }),
+        );
+    }
+    return icon;
+}
+
+function statusChip(outlook) {
+    return h('span', { class: `chip chip-${outlook.status}`, title: methodNote(outlook) || null }, statusIcon(outlook.status), statusText(outlook));
+}
+
+// Same order as the app's tooltip: the most severe status; a reached limit
+// that lasts longest; otherwise the limit or reset that comes first.
+function urgency(outlook) {
+    if (outlook.status === 'blocked') return [SEVERITY.blocked, outlook.reset_at || 0];
+    const moment = outlook.limit_at || outlook.reset_at || Infinity;
+    return [SEVERITY[outlook.status] || 0, -moment];
+}
+
+function moreUrgent(a, b) {
+    const [severityA, momentA] = urgency(a.outlook);
+    const [severityB, momentB] = urgency(b.outlook);
+    return severityA !== severityB ? severityA > severityB : momentA > momentB;
+}
+
+// ---------- Summary ----------
+
+function sentenceFor(provider) {
+    const name = provider.label;
+    if (provider.error && !provider.usage.length) return fmt(tr('summary_error', '{provider}: the last update failed.'), { provider: name });
+    let worst = null;
+    for (const entry of provider.usage) {
+        const candidate = { entry, outlook: outlookOf(entry) };
+        if (!worst || moreUrgent(candidate, worst)) worst = candidate;
+    }
+    if (!worst) return fmt(tr('summary_waiting', '{provider}: waiting for usage data.'), { provider: name });
+    const { entry, outlook } = worst;
+    const vars = { provider: name, label: entry.label };
+    if (outlook.status === 'blocked') {
+        const when = outlook.reset_at ? whenText(outlook.reset_at) : '-';
+        return fmt(tr('summary_blocked', '{provider}: {label} limit reached - available again {when}.'), { ...vars, when });
+    }
+    if (outlook.status === 'limit' && outlook.limit_at) {
+        return fmt(tr('summary_limit_at', '{provider}: {label} runs out around {clock}, {lead} before its reset.'), {
+            ...vars, clock: whenText(outlook.limit_at), lead: durationText(outlook.reset_at - outlook.limit_at),
+        });
+    }
+    if (outlook.status === 'limit') {
+        return fmt(tr('summary_limit', '{provider}: {label} may run out before its reset ({when}).'), { ...vars, when: whenText(outlook.reset_at) });
+    }
+    if (outlook.status === 'tight') {
+        return fmt(tr('summary_tight', '{provider}: {label} is tight - about {pct} by its reset ({when}).'), {
+            ...vars, pct: pct(outlook.forecast_pct), when: whenText(outlook.reset_at),
+        });
+    }
+    return fmt(tr('summary_ok', '{provider}: every quota is on track.'), { provider: name });
+}
+
+function renderSummary() {
+    const nodes = [];
+    const ordered = [...providers()].sort((a, b) => worstSeverity(b) - worstSeverity(a) || providerRank(a.id) - providerRank(b.id));
+    for (const provider of ordered) {
+        nodes.push(h('span', { class: 'summary-item' }, dot(provider.id), sentenceFor(provider)));
+    }
+    byId('summary').replaceChildren(...nodes);
+}
+
+function worstSeverity(provider) {
+    let worst = 0;
+    for (const entry of provider.usage) worst = Math.max(worst, SEVERITY[outlookOf(entry).status] || 0);
+    return worst;
+}
+
+function dot(provider) {
+    const node = h('span', { class: 'dot', 'aria-hidden': 'true' });
+    node.style.background = providerColor(provider);
+    return node;
+}
+
+// ---------- "Now" cards ----------
+
+function renderNow() {
+    byId('nowGrid').replaceChildren(...providers().map(nowCard));
+}
+
+function nowCard(provider) {
+    const head = h('header', { class: 'now-head' },
+        dot(provider.id),
+        h('h2', { text: provider.label }),
+        h('span', { class: 'fresh', text: formatUpdated(provider.last_success_time) }));
+    const body = [];
+    if (provider.error) body.push(h('p', { class: 'error', text: provider.error }));
+    for (const entry of provider.usage) body.push(quotaRow(entry));
+    if (!provider.usage.length && !provider.error) body.push(h('p', { class: 'muted', text: tr('waiting_usage', 'Waiting for usage data') }));
+    return h('article', { class: 'now-card' }, head, ...body);
+}
+
+function quotaRow(entry) {
+    const outlook = outlookOf(entry);
+    const top = h('div', { class: 'quota-top' },
+        h('span', { class: 'quota-label', text: entry.label }),
+        statusChip(outlook),
+        h('strong', { class: 'quota-value', text: pct(entry.utilization) }));
+    return h('div', { class: 'quota' }, top, meter(entry, outlook), h('p', { class: 'quota-sub', text: quotaDetail(entry, outlook) }));
+}
+
+function quotaDetail(entry, outlook) {
     const parts = [entry.reset_text || tr('no_reset', 'No reset time')];
-    if (entry.burn) {
-        const pace = entry.burn.healthy ? tr('pace_healthy', 'on pace') : tr('pace_ahead', 'ahead of pace');
-        if (entry.burn.eta_seconds) parts.push(`ETA ${formatCountdown(entry.burn.eta_seconds)}`);
-        parts.push(`${Math.round(entry.burn.burn_per_hour * 10) / 10} pp/h`);
-        parts.push(pace);
+    const forecast = outlook.forecast_pct;
+    // A projected limit is named by the chip; calm and tight windows add where they are heading.
+    if (outlook.status === 'limit' && outlook.limit_at && outlook.reset_at) {
+        parts.push(fmt(tr('gap_before_reset', '~{duration} without quota before the reset'), { duration: durationText(outlook.reset_at - outlook.limit_at) }));
+    } else if ((outlook.status === 'ok' || outlook.status === 'tight') && forecast !== null && forecast !== undefined && forecast - entry.utilization >= 0.5) {
+        parts.push(fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: Math.round(forecast) }));
     }
+    // After today's day end the projection targets tomorrow's, so the time is named relative to now.
+    if (outlook.day_end_pct !== null && outlook.day_end_pct !== undefined && state.status.day_end) {
+        const target = whenText(state.status.day_end, state.status.now);
+        parts.push(fmt(tr('by_time', '{pct}% by {time}'), { pct: Math.round(outlook.day_end_pct), time: target }));
+    }
+    const trend = trendText(entry.trend);
+    if (trend) parts.push(trend);
     return parts.join(' · ');
 }
 
-function renderDiagnostics(status) {
-    const root = document.getElementById('diagnostics');
-    const cards = [
-        [tr('diag_app', 'App'), `${status.app.name} ${status.app.version}`],
-        [tr('diag_bind', 'Dashboard bind'), status.privacy.bind],
-        [tr('diag_analytics', 'Analytics'), status.privacy.analytics ? tr('enabled', 'enabled') : tr('disabled', 'disabled')],
-        [tr('diag_tokens', 'Token payloads'), status.privacy.token_free ? tr('not_exposed', 'not exposed') : tr('check_config', 'check configuration')],
-        [tr('diag_next_update', 'Next update'), status.next_poll_time ? formatCountdown(status.next_poll_time - Date.now() / 1000) : tr('unknown', 'unknown')],
-    ];
-    for (const provider of status.providers || []) {
-        const versions = (provider.installations || []).map(i => `${i.name} ${i.version}`).join(', ') || tr('not_detected', 'not detected');
-        cards.push([fmt(tr('cli', '{label} CLI'), { label: provider.label }), versions]);
-    }
-    root.replaceChildren(...cards.map(([k, v]) => {
-        const div = document.createElement('div');
-        div.className = 'diag';
-        div.innerHTML = `<div class="muted">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`;
-        return div;
-    }));
+// Compares the current quota cycle's pace to past cycles at the same age:
+// whether this cycle is unusually heavy, not just whether it runs out.
+function trendText(trend) {
+    if (!trend || !Number.isFinite(trend.delta_pct) || !trend.cycles_compared) return null;
+    const delta = Math.round(trend.delta_pct);
+    const signed = `${delta > 0 ? '+' : ''}${delta}pp`;
+    return fmt(tr('vs_usual_pace', '{delta} vs usual pace ({n} cycles)'), { delta: signed, n: trend.cycles_compared });
 }
 
-// ---------- Charts ----------
+// Three layers: usage, a lighter projection to the reset, and a marker for the
+// share of the window that has passed.  Multi-day windows show midnights.
+function meter(entry, outlook) {
+    const used = Math.min(100, Math.max(0, entry.utilization));
+    const forecast = outlook.forecast_pct === null || outlook.forecast_pct === undefined ? used : Math.min(100, outlook.forecast_pct);
+    const elapsed = entry.outlook ? entry.outlook.elapsed_pct : null;
+    const label = [fmt(tr('meter_used', '{pct} used'), { pct: pct(used) })];
+    if (forecast > used) label.push(fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: Math.round(forecast) }));
+    const node = h('div', { class: `meter meter-${outlook.status}`, role: 'img', 'aria-label': label.join(', ') });
+    for (const position of midnights(entry)) {
+        const tick = h('span', { class: 'meter-tick' });
+        tick.style.left = `${position * 100}%`;
+        node.append(tick);
+    }
+    const fill = h('span', { class: 'meter-used' });
+    fill.style.width = `${used}%`;
+    node.append(fill);
+    if (forecast - used > 0.5) {
+        const ghost = h('span', { class: 'meter-ghost' });
+        ghost.style.left = `${used}%`;
+        ghost.style.width = `${forecast - used}%`;
+        node.append(ghost);
+    }
+    if (elapsed !== null && elapsed !== undefined) {
+        const marker = h('span', { class: 'meter-now' });
+        marker.style.left = `${elapsed}%`;
+        node.append(marker);
+    }
+    return node;
+}
+
+function midnights(entry) {
+    const reset = resetSeconds(entry.resets_at);
+    const period = entry.period_seconds;
+    if (!reset || !period || period <= DAY) return [];
+    const start = reset - period;
+    const positions = [];
+    const marker = new Date(start * 1000);
+    marker.setHours(24, 0, 0, 0);
+    while (marker.getTime() / 1000 < reset) {
+        positions.push((marker.getTime() / 1000 - start) / period);
+        marker.setDate(marker.getDate() + 1);
+    }
+    return positions;
+}
+
+function resetSeconds(value) {
+    const ms = Date.parse(value || '');
+    return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
+// ---------- History series ----------
 
 // Every quota series in the history rows, ordered like the provider cards.
 // Field labels and window lengths come from the server, so new quota fields
 // show up without any change here.
-function quotaSeries(rows, fields, providers) {
+function quotaSeries() {
+    const rows = state.history.rows || [];
+    const fields = state.history.fields || {};
     const byKey = new Map();
     for (const row of rows) {
         if (row.utilization === null || !row.field) continue;
@@ -289,6 +539,7 @@ function quotaSeries(rows, fields, providers) {
         if (!byKey.has(key)) {
             const meta = fields[row.field] || {};
             byKey.set(key, {
+                key,
                 provider: row.provider,
                 field: row.field,
                 period: meta.period_seconds || null,
@@ -299,16 +550,24 @@ function quotaSeries(rows, fields, providers) {
         }
         byKey.get(key).points.push({ ts: row.ts, value: row.utilization, reset: resetSeconds(row.resets_at) });
     }
-    const order = providers.map(provider => provider.id);
-    const rank = id => (order.includes(id) ? order.indexOf(id) : order.length);
     const series = Array.from(byKey.values());
     for (const entry of series) entry.points.sort((a, b) => a.ts - b.ts);
-    return series.sort((a, b) => rank(a.provider) - rank(b.provider) || (a.variant ? 1 : 0) - (b.variant ? 1 : 0) || a.field.localeCompare(b.field));
+    return series.sort((a, b) => providerRank(a.provider) - providerRank(b.provider)
+        || (a.variant ? 1 : 0) - (b.variant ? 1 : 0)
+        || a.field.localeCompare(b.field));
 }
 
-function resetSeconds(value) {
-    const ms = Date.parse(value || '');
-    return Number.isFinite(ms) ? ms / 1000 : null;
+function seriesName(entry) {
+    return entry.variant ? `${providerLabel(entry.provider)} · ${entry.fieldLabel}` : providerLabel(entry.provider);
+}
+
+// Table columns name the window of base series too, since the table lists every window side by side.
+function columnName(entry) {
+    return entry.variant ? seriesName(entry) : `${providerLabel(entry.provider)} · ${entry.fieldLabel}`;
+}
+
+function isHidden(entry) {
+    return state.hidden.has(entry.provider) || (entry.variant !== null && state.hidden.has(entry.key));
 }
 
 function sameCycle(a, b) {
@@ -328,15 +587,6 @@ function cycleRuns(points) {
     return runs;
 }
 
-function providerLabel(id) {
-    const provider = ((state.status && state.status.providers) || []).find(entry => entry.id === id);
-    return provider ? provider.label : id;
-}
-
-function seriesLabel(entry) {
-    return entry.variant ? `${providerLabel(entry.provider)} ${entry.fieldLabel}` : providerLabel(entry.provider);
-}
-
 function chartSpan() {
     const to = Date.now() / 1000;
     const span = RANGE_SECONDS[state.history.range] || RANGE_SECONDS['24h'];
@@ -346,7 +596,7 @@ function chartSpan() {
     return { from: to - span, to, gapSeconds };
 }
 
-// One chart per quota window length (session, weekly, ...), so every field
+// One panel per quota window length (session, weekly, ...), so every field
 // the API reports is shown without mixing time scales on one axis.
 function periodGroups(series) {
     const groups = new Map();
@@ -356,199 +606,8 @@ function periodGroups(series) {
         groups.get(key).series.push(entry);
     }
     const sorted = Array.from(groups.values()).sort((a, b) => (a.period ?? Infinity) - (b.period ?? Infinity));
-    for (const group of sorted) group.title = (group.series.find(entry => !entry.variant) || group.series[0]).fieldLabel;
+    for (const group of sorted) group.title = (group.series.find((entry) => !entry.variant) || group.series[0]).fieldLabel;
     return sorted;
-}
-
-function lineFor(entry, runs) {
-    return {
-        color: providerColor(entry.provider),
-        width: entry.variant ? 1.5 : 2,
-        alpha: entry.variant ? 0.6 : 1,
-        runs,
-    };
-}
-
-function legend(series) {
-    const list = document.createElement('div');
-    list.className = 'legend';
-    for (const entry of series) {
-        const item = document.createElement('span');
-        item.className = 'legend-item';
-        const key = document.createElement('i');
-        key.className = entry.variant ? 'legend-key variant' : 'legend-key';
-        key.style.background = providerColor(entry.provider);
-        const text = document.createElement('span');
-        text.textContent = seriesLabel(entry);
-        item.append(key, text);
-        list.appendChild(item);
-    }
-    return list;
-}
-
-function renderCharts() {
-    const series = quotaSeries(state.history.rows || [], state.history.fields || {}, state.status.providers || []);
-    const span = chartSpan();
-    renderUsageCharts(series, span);
-    renderBurnChart(series, span);
-}
-
-function renderUsageCharts(series, span) {
-    const root = document.getElementById('usageCharts');
-    const groups = periodGroups(series);
-    if (!groups.length) {
-        root.replaceChildren(emptyMuted(tr('waiting_history', 'Waiting for history data')));
-        return;
-    }
-    const blocks = groups.map(group => {
-        const block = document.createElement('div');
-        block.className = 'chart-block';
-        const head = document.createElement('div');
-        head.className = 'chart-head';
-        const title = document.createElement('h3');
-        title.textContent = group.title;
-        head.append(title, legend(group.series));
-        const canvas = document.createElement('canvas');
-        canvas.className = 'chart-canvas';
-        block.append(head, canvas);
-        return { block, canvas, group };
-    });
-    root.replaceChildren(...blocks.map(entry => entry.block));
-    for (const { canvas, group } of blocks) {
-        const lines = group.series.map(entry => lineFor(entry, cycleRuns(entry.points)));
-        drawLineChart(canvas, lines, { ...span, minY: 0, maxY: 100, step: 25, unit: '%' });
-    }
-}
-
-// Burn rate of each provider's shortest base window (the session), where
-// pace decides whether the quota lasts.  Rates are taken only between
-// consecutive readings of one cycle, never across a reset or a gap.
-function renderBurnChart(series, span) {
-    const shortest = new Map();
-    for (const entry of series) {
-        if (entry.variant || entry.period === null) continue;
-        const current = shortest.get(entry.provider);
-        if (!current || entry.period < current.period) shortest.set(entry.provider, entry);
-    }
-    const chosen = Array.from(shortest.values());
-    const lines = chosen.map(entry => lineFor(entry, burnRuns(entry.points, span.gapSeconds)));
-    const labels = new Set(chosen.map(entry => entry.fieldLabel));
-    const unit = tr('pp_per_hour', 'percentage points per hour');
-    document.getElementById('burnMeta').textContent = labels.size === 1 ? `${Array.from(labels)[0]} · ${unit}` : unit;
-    document.getElementById('burnLegend').replaceChildren(legend(chosen));
-    drawLineChart(document.getElementById('burnChart'), lines, { ...span, gapSeconds: Infinity, minY: 0, maxY: 60, step: 20, unit: '' });
-}
-
-function burnRuns(points, gapSeconds) {
-    const runs = [];
-    for (const run of cycleRuns(points)) {
-        let current = [];
-        for (let index = 1; index < run.length; index++) {
-            const previous = run[index - 1];
-            const point = run[index];
-            const seconds = point.ts - previous.ts;
-            if (seconds <= 0 || seconds > gapSeconds) {
-                if (current.length) runs.push(current);
-                current = [];
-                continue;
-            }
-            current.push({ ts: point.ts, value: (point.value - previous.value) / (seconds / 3600) });
-        }
-        if (current.length) runs.push(current);
-    }
-    return runs;
-}
-
-// Sizes the backing store from the canvas's CSS box on every draw, so repeated
-// draws keep the same on-screen size at any display scaling.
-function prepareCanvas(canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(rect.width));
-    const height = Math.max(1, Math.round(rect.height));
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    return { ctx, width, height };
-}
-
-// Draws lines on a fixed time window with value and time axes.  Lines are
-// clipped to the plot; within a run, a stretch without readings is drawn as
-// a step (the last value held until the next reading).
-function drawLineChart(canvas, lines, options) {
-    const { ctx, width, height } = prepareCanvas(canvas);
-    const plot = { x: 48, y: 10, w: Math.max(1, width - 60), h: Math.max(1, height - 34) };
-    const x = ts => plot.x + ((ts - options.from) / (options.to - options.from)) * plot.w;
-    const y = value => plot.y + plot.h - ((value - options.minY) / (options.maxY - options.minY)) * plot.h;
-    const text = themeColor('--chart-text', '#667085');
-
-    ctx.font = '11px "Segoe UI Variable", "Segoe UI", system-ui, sans-serif';
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = themeColor('--chart-grid', '#d9dee7');
-    ctx.fillStyle = text;
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    for (let value = options.minY; value <= options.maxY; value += options.step) {
-        const lineY = Math.round(y(value)) + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(plot.x, lineY);
-        ctx.lineTo(plot.x + plot.w, lineY);
-        ctx.stroke();
-        ctx.fillText(`${value}${options.unit}`, plot.x - 8, lineY);
-    }
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    for (const tick of timeTicks(options.from, options.to, plot.w)) {
-        const tickX = Math.round(x(tick.ts)) + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(tickX, plot.y);
-        ctx.lineTo(tickX, plot.y + plot.h);
-        ctx.stroke();
-        if (tickX > plot.x + 18 && tickX < plot.x + plot.w - 18) ctx.fillText(tick.label, tickX, plot.y + plot.h + 7);
-    }
-
-    if (!lines.some(line => line.runs.length)) {
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(tr('waiting_history', 'Waiting for history data'), plot.x + 8, plot.y + plot.h / 2);
-        return;
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(plot.x, plot.y, plot.w, plot.h);
-    ctx.clip();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (const line of lines) {
-        ctx.strokeStyle = line.color;
-        ctx.fillStyle = line.color;
-        ctx.globalAlpha = line.alpha;
-        ctx.lineWidth = line.width;
-        for (const run of line.runs) {
-            if (run.length === 1) {
-                ctx.beginPath();
-                ctx.arc(x(run[0].ts), y(run[0].value), line.width, 0, 2 * Math.PI);
-                ctx.fill();
-                continue;
-            }
-            ctx.beginPath();
-            run.forEach((point, index) => {
-                if (index === 0) {
-                    ctx.moveTo(x(point.ts), y(point.value));
-                    return;
-                }
-                const previous = run[index - 1];
-                if (point.ts - previous.ts > options.gapSeconds) ctx.lineTo(x(point.ts), y(previous.value));
-                ctx.lineTo(x(point.ts), y(point.value));
-            });
-            ctx.stroke();
-        }
-    }
-    ctx.restore();
 }
 
 // Local-time axis ticks: every few hours for a day, daily for a week, weekly
@@ -556,238 +615,730 @@ function drawLineChart(canvas, lines, options) {
 function timeTicks(from, to, plotWidth) {
     const ticks = [];
     const tick = new Date(from * 1000);
-    if (to - from <= 36 * 3600) {
+    if (to - from <= 36 * HOUR) {
         const stepHours = plotWidth < 480 ? 6 : 3;
         tick.setMinutes(0, 0, 0);
         tick.setHours(Math.ceil(tick.getHours() / stepHours) * stepHours);
         while (tick.getTime() / 1000 <= to) {
-            ticks.push({ ts: tick.getTime() / 1000, label: tick.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+            ticks.push({ ts: tick.getTime() / 1000, label: `${pad(tick.getHours())}:00` });
             tick.setHours(tick.getHours() + stepHours);
         }
         return ticks;
     }
-    const stepDays = to - from <= 8 * 24 * 3600 ? 1 : 7;
-    const format = stepDays === 1 ? { weekday: 'short', day: 'numeric' } : { day: 'numeric', month: 'short' };
+    const stepDays = to - from <= 8 * DAY ? 1 : 7;
     tick.setHours(24, 0, 0, 0);
+    if (stepDays === 7) {
+        while (tick.getDay() !== 1) tick.setDate(tick.getDate() + 1);
+    }
     while (tick.getTime() / 1000 <= to) {
-        ticks.push({ ts: tick.getTime() / 1000, label: tick.toLocaleDateString([], format) });
+        const date = new Date(tick);
+        const label = stepDays === 1 ? `${weekdayName(date)} ${date.getDate()}` : date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+        ticks.push({ ts: tick.getTime() / 1000, label });
         tick.setDate(tick.getDate() + stepDays);
     }
     return ticks;
 }
 
-function renderPredictions(status) {
-    const settings = status.settings || {};
-    const section = document.getElementById('predictionSection');
-    section.hidden = settings.prediction_enabled === false;
-    if (section.hidden) return;
+// Background bands: nights on a day's chart, weekends on longer ones.
+function bands(from, to) {
+    const result = [];
+    const day = new Date(from * 1000);
+    day.setHours(0, 0, 0, 0);
+    while (day.getTime() / 1000 < to) {
+        const start = day.getTime() / 1000;
+        const next = new Date(day);
+        next.setDate(next.getDate() + 1);
+        if (to - from <= 36 * HOUR) {
+            const morning = new Date(day);
+            morning.setHours(6, 0, 0, 0);
+            result.push([start, morning.getTime() / 1000]);
+        } else if (day.getDay() === 0 || day.getDay() === 6) {
+            result.push([start, next.getTime() / 1000]);
+        }
+        day.setDate(day.getDate() + 1);
+    }
+    return result.map(([a, b]) => [Math.max(from, a), Math.min(to, b)]).filter(([a, b]) => b > a);
+}
 
-    const root = document.getElementById('predictions');
-    const cards = [];
-    const target = settings.prediction_day_end_time || '18:00';
-    const hoursToDayEnd = hoursUntilLocalTime(target);
+function nearest(points, ts, limit) {
+    if (!points.length) return null;
+    let low = 0;
+    let high = points.length - 1;
+    while (low < high) {
+        const middle = (low + high) >> 1;
+        if (points[middle].ts < ts) low = middle + 1;
+        else high = middle;
+    }
+    let best = points[low];
+    if (low > 0 && Math.abs(points[low - 1].ts - ts) < Math.abs(best.ts - ts)) best = points[low - 1];
+    return Math.abs(best.ts - ts) <= limit ? best : null;
+}
 
-    for (const provider of status.providers || []) {
-        for (const entry of provider.usage || []) {
-            if (!entry.burn || !Number.isFinite(entry.burn.burn_per_hour)) continue;
-            const resetHours = secondsUntilIso(entry.resets_at) / 3600;
-            // Usage never exceeds the quota, and a window that resets before the
-            // day's end has no usage left to project past its reset.
-            const periodPct = Math.min(100, entry.utilization + entry.burn.burn_per_hour * resetHours);
-            const resetsFirst = resetHours > 0 && resetHours <= hoursToDayEnd;
-            const dayPct = Math.min(100, entry.utilization + entry.burn.burn_per_hour * hoursToDayEnd);
-            const byReset = fmt(tr('by_reset', '{pct}% by reset'), { pct: Math.round(periodPct) });
-            cards.push({
-                title: `${provider.label} ${entry.label}`,
-                day: resetsFirst ? byReset : fmt(tr('by_time', '{pct}% by {time}'), { pct: Math.round(dayPct), time: target }),
-                period: resetsFirst ? '' : byReset,
-                trend: trendText(entry.trend),
-                tone: periodPct >= 100 || (!resetsFirst && dayPct >= 100) ? 'warn' : 'ok',
-            });
+// ---------- Legend ----------
+
+function renderLegend() {
+    const series = quotaSeries();
+    const entries = [];
+    const seen = new Set();
+    for (const entry of series) {
+        if (!seen.has(entry.provider)) {
+            seen.add(entry.provider);
+            entries.push({ key: entry.provider, provider: entry.provider, text: providerLabel(entry.provider), variant: false });
         }
     }
-
-    document.getElementById('predictionMeta').textContent = fmt(tr('day_target', 'local day target {target}'), { target });
-    root.replaceChildren(...cards.map(card => {
-        const div = document.createElement('div');
-        div.className = `prediction ${card.tone}`;
-        div.innerHTML = `
-            <div class="muted">${escapeHtml(card.title)}</div>
-            <strong>${escapeHtml(card.day)}</strong>
-            ${card.period ? `<span>${escapeHtml(card.period)}</span>` : ''}
-            ${card.trend ? `<span class="trend">${escapeHtml(card.trend)}</span>` : ''}
-        `;
-        return div;
-    }));
-    if (!cards.length) {
-        const empty = document.createElement('p');
-        empty.className = 'muted';
-        empty.textContent = tr('waiting_enough', 'Waiting for enough usage data');
-        root.replaceChildren(empty);
-    }
-}
-
-// One series per provider - its longest base quota window - so the same work
-// is not counted once for every quota field that it also consumed.
-function heatmapSeries(series) {
-    const chosen = new Map();
     for (const entry of series) {
-        if (entry.variant || entry.period === null) continue;
-        const current = chosen.get(entry.provider);
-        if (!current || entry.period > current.period) chosen.set(entry.provider, entry);
+        if (entry.variant) entries.push({ key: entry.key, provider: entry.provider, text: seriesName(entry), variant: true });
     }
-    return Array.from(chosen.values());
+    byId('historyLegend').replaceChildren(...entries.map((entry) => {
+        const key = h('span', { class: entry.variant ? 'key variant' : 'key' });
+        key.style.background = providerColor(entry.provider);
+        return h('button', {
+            type: 'button',
+            'aria-pressed': state.hidden.has(entry.key) ? 'false' : 'true',
+            onclick: () => toggleSeries(entry.key),
+        }, key, entry.text);
+    }));
 }
 
-function renderHeatmap(rows, fields, status) {
-    const settings = status.settings || {};
-    const section = document.getElementById('heatmapSection');
+function toggleSeries(key) {
+    if (state.hidden.has(key)) state.hidden.delete(key);
+    else state.hidden.add(key);
+    writeStored('agentpulse-hidden-series', Array.from(state.hidden));
+    renderCharts();
+}
+
+// ---------- Tooltip ----------
+
+function showTip(content, clientX, clientY) {
+    const tip = byId('tip');
+    tip.replaceChildren(...[].concat(content));
+    tip.hidden = false;
+    const rect = tip.getBoundingClientRect();
+    let left = clientX + 14;
+    let top = clientY + 14;
+    if (left + rect.width > window.innerWidth - 8) left = clientX - rect.width - 14;
+    if (top + rect.height > window.innerHeight - 8) top = clientY - rect.height - 14;
+    tip.style.left = `${Math.max(8, left)}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideTip() {
+    byId('tip').hidden = true;
+}
+
+function tipRow(provider, value, name, variant = false) {
+    const key = h('span', { class: variant ? 'key variant' : 'key' });
+    key.style.background = providerColor(provider);
+    return h('div', { class: 'tip-row' }, key, h('strong', { text: value }), h('span', { text: name }));
+}
+
+// ---------- History chart ----------
+
+const HISTORY_MARGIN = { top: 26, bottom: 30, left: 44 };
+const PANEL_GAP = 40;
+
+function renderHistory() {
+    const root = byId('historyChart');
+    const series = quotaSeries();
+    const span = chartSpan();
+    const groups = periodGroups(series);
+    const meta = state.history.bucket_seconds
+        ? fmt(tr('points_bucketed', '{count} points · highest reading per {minutes} min'), {
+            count: pointCount(series), minutes: state.history.bucket_seconds / 60,
+        })
+        : fmt(tr('points_raw', '{count} readings'), { count: pointCount(series) });
+    byId('historyMeta').textContent = meta;
+    if (!groups.length) {
+        root.replaceChildren(h('p', { class: 'muted empty', text: tr('waiting_history', 'Waiting for history data') }));
+        return;
+    }
+
+    const width = Math.max(300, Math.floor(root.clientWidth));
+    const narrow = width < 640;
+    const margin = { ...HISTORY_MARGIN, right: narrow ? 12 : 128 };
+    const panelHeight = narrow ? 120 : 150;
+    const height = margin.top + groups.length * panelHeight + (groups.length - 1) * PANEL_GAP + margin.bottom;
+    const plotRight = width - margin.right;
+    const x = (ts) => margin.left + ((ts - span.from) / (span.to - span.from)) * (plotRight - margin.left);
+    const top = (index) => margin.top + index * (panelHeight + PANEL_GAP);
+    const y = (index, value) => top(index) + (1 - Math.max(0, Math.min(100, value)) / 100) * panelHeight;
+    const svg = s('svg', {
+        class: 'chart', width, height, viewBox: `0 0 ${width} ${height}`, tabindex: 0, role: 'img',
+        'aria-label': fmt(tr('history_label', 'Usage history, {range}'), { range: rangeName(state.history.range) }),
+    });
+
+    for (const [a, b] of bands(span.from, span.to)) {
+        groups.forEach((group, index) => svg.append(s('rect', { class: 'band', x: x(a), y: top(index), width: x(b) - x(a), height: panelHeight })));
+    }
+    for (const tick of timeTicks(span.from, span.to, plotRight - margin.left)) {
+        const tickX = x(tick.ts);
+        groups.forEach((group, index) => svg.append(s('line', { class: 'grid-line', x1: tickX, x2: tickX, y1: top(index), y2: top(index) + panelHeight })));
+        if (tickX - margin.left < 20 || plotRight - tickX < 20) continue;
+        svg.append(s('text', { class: 'tick', x: tickX, y: height - 9, 'text-anchor': 'middle', text: tick.label }));
+    }
+
+    const visible = [];
+    groups.forEach((group, index) => {
+        svg.append(s('text', { class: 'panel-title', x: margin.left, y: top(index) - 9, text: group.title }));
+        for (const value of [0, 50, 100]) {
+            svg.append(s('line', { class: value === 0 ? 'axis-line' : 'grid-line', x1: margin.left, x2: plotRight, y1: y(index, value), y2: y(index, value) }));
+            const text = value === 100 ? '100%' : String(value);
+            svg.append(s('text', { class: 'tick', x: margin.left - 8, y: y(index, value) + 4, 'text-anchor': 'end', text }));
+        }
+        const clip = `clip-panel-${index}`;
+        svg.append(s('clipPath', { id: clip }, s('rect', { x: margin.left, y: top(index) - 2, width: plotRight - margin.left, height: panelHeight + 4 })));
+        const layer = s('g', { 'clip-path': `url(#${clip})` });
+        for (const entry of group.series) {
+            if (isHidden(entry)) continue;
+            visible.push({ entry, index });
+            drawSeries(layer, entry, (point) => x(point.ts), (point) => y(index, point.value), span.gapSeconds);
+        }
+        svg.append(layer);
+        if (!narrow) endLabels(svg, group.series.filter((entry) => !isHidden(entry)), index, x, y, plotRight, span);
+    });
+
+    attachCrosshair(svg, { visible, groups, span, x, y, width, margin, height });
+    root.replaceChildren(svg);
+}
+
+function pointCount(series) {
+    let count = 0;
+    for (const entry of series) count += entry.points.length;
+    return count;
+}
+
+function rangeName(range) {
+    return tr(`range_${range}`, range);
+}
+
+// A path per quota cycle: a stretch without readings holds the last value as
+// a step, and a single reading shows as a dot.
+function drawSeries(layer, entry, fx, fy, gapSeconds) {
+    const color = providerColor(entry.provider);
+    for (const run of cycleRuns(entry.points)) {
+        if (run.length === 1) {
+            layer.append(s('circle', { cx: fx(run[0]), cy: fy(run[0]), r: 2.2, fill: color, class: entry.variant ? 'variant' : null }));
+            continue;
+        }
+        let path = '';
+        run.forEach((point, index) => {
+            if (index === 0) {
+                path += `M${fx(point).toFixed(1)},${fy(point).toFixed(1)}`;
+                return;
+            }
+            if (point.ts - run[index - 1].ts > gapSeconds) path += `H${fx(point).toFixed(1)}`;
+            path += `L${fx(point).toFixed(1)},${fy(point).toFixed(1)}`;
+        });
+        layer.append(s('path', { d: path, stroke: color, class: entry.variant ? 'line variant' : 'line' }));
+    }
+}
+
+// Latest value of each visible line at the right edge, nudged apart so labels never overlap.
+function endLabels(svg, series, index, x, y, plotRight, span) {
+    const labels = [];
+    for (const entry of series) {
+        const last = entry.points[entry.points.length - 1];
+        if (!last || span.to - last.ts > span.gapSeconds * 2) continue;
+        labels.push({ entry, value: last.value, x: x(last.ts), y: y(index, last.value), labelY: y(index, last.value) });
+    }
+    labels.sort((a, b) => a.labelY - b.labelY);
+    labels.forEach((label, position) => {
+        if (position) label.labelY = Math.max(label.labelY, labels[position - 1].labelY + 15);
+    });
+    const overflow = labels.length ? labels[labels.length - 1].labelY - (y(index, 0) + 4) : 0;
+    if (overflow > 0) for (const label of labels) label.labelY -= overflow;
+    for (const label of labels) {
+        const labelX = plotRight + 12;
+        svg.append(s('line', { class: 'leader', x1: label.x + 3, y1: label.y, x2: labelX - 3, y2: label.labelY }));
+        svg.append(s('text', { class: 'end-label', x: labelX, y: label.labelY + 4 },
+            s('tspan', { class: 'end-value', text: pct(label.value) }),
+            s('tspan', { dx: 5, text: label.entry.variant ? label.entry.fieldLabel : providerLabel(label.entry.provider) })));
+    }
+}
+
+// One vertical line and one tooltip for every visible series; the chart also
+// takes the keyboard (arrows move, Home/End jump, Escape hides).
+function attachCrosshair(svg, chart) {
+    const { visible, groups, span, x, y, width, margin, height } = chart;
+    const plotRight = width - margin.right;
+    const cross = s('g', { class: 'crosshair', visibility: 'hidden' });
+    const line = s('line', { class: 'cross-line', y1: margin.top - 4, y2: height - margin.bottom });
+    cross.append(line);
+    const dots = new Map();
+    for (const { entry } of visible) {
+        const marker = s('circle', { r: 4, class: 'cross-dot', fill: providerColor(entry.provider) });
+        dots.set(entry.key, marker);
+        cross.append(marker);
+    }
+    const hit = s('rect', { class: 'hit', x: margin.left, y: margin.top - 4, width: plotRight - margin.left, height: height - margin.top - margin.bottom + 4 });
+    svg.append(cross, hit);
+
+    let focusTs = span.to;
+    const moveTo = (ts, clientX, clientY) => {
+        const target = Math.max(span.from, Math.min(span.to, ts));
+        let snapped = null;
+        const readings = visible.map(({ entry, index }) => {
+            const point = nearest(entry.points, target, span.gapSeconds);
+            if (point && (snapped === null || Math.abs(point.ts - target) < Math.abs(snapped - target))) snapped = point.ts;
+            return { entry, index, point };
+        });
+        const at = snapped === null ? target : snapped;
+        focusTs = at;
+        line.setAttribute('x1', x(at));
+        line.setAttribute('x2', x(at));
+        for (const { entry, index, point } of readings) {
+            const marker = dots.get(entry.key);
+            if (!point) {
+                marker.setAttribute('visibility', 'hidden');
+                continue;
+            }
+            marker.setAttribute('visibility', 'visible');
+            marker.setAttribute('cx', x(point.ts));
+            marker.setAttribute('cy', y(index, point.value));
+        }
+        cross.setAttribute('visibility', 'visible');
+        const rows = [h('div', { class: 'tip-head', text: `${weekdayName(new Date(at * 1000))} ${new Date(at * 1000).getDate()}, ${clock(at)}` })];
+        groups.forEach((group, index) => {
+            const inPanel = readings.filter((reading) => reading.index === index);
+            if (!inPanel.length) return;
+            rows.push(h('div', { class: 'tip-group', text: group.title }));
+            for (const { entry, point } of inPanel) rows.push(tipRow(entry.provider, point ? pct(point.value) : '-', seriesName(entry), !!entry.variant));
+        });
+        let px = clientX;
+        let py = clientY;
+        if (px === undefined) {
+            const bounds = svg.getBoundingClientRect();
+            px = bounds.left + x(at) * (bounds.width / width);
+            py = bounds.top + margin.top + 24;
+        }
+        showTip(rows, px, py);
+    };
+    const hide = () => {
+        cross.setAttribute('visibility', 'hidden');
+        hideTip();
+    };
+    hit.addEventListener('pointermove', (event) => {
+        const bounds = svg.getBoundingClientRect();
+        const px = (event.clientX - bounds.left) * (width / bounds.width);
+        moveTo(span.from + ((px - margin.left) / (plotRight - margin.left)) * (span.to - span.from), event.clientX, event.clientY);
+    });
+    hit.addEventListener('pointerleave', hide);
+    svg.addEventListener('focus', () => moveTo(focusTs));
+    svg.addEventListener('blur', hide);
+    svg.addEventListener('keydown', (event) => {
+        const step = (span.to - span.from) / 60;
+        if (event.key === 'ArrowLeft') moveTo(focusTs - step);
+        else if (event.key === 'ArrowRight') moveTo(focusTs + step);
+        else if (event.key === 'Home') moveTo(span.from);
+        else if (event.key === 'End') moveTo(span.to);
+        else if (event.key === 'Escape') hide();
+        else return;
+        event.preventDefault();
+    });
+}
+
+// ---------- Data table ----------
+
+// The highest reading of every visible series per local hour (one day) or day
+// (longer ranges), newest first - the chart's data in readable form.
+function renderHistoryTable() {
+    const series = quotaSeries().filter((entry) => !isHidden(entry));
+    const span = chartSpan();
+    const hourly = state.history.range === '24h';
+    const starts = [];
+    const cursor = new Date(span.to * 1000);
+    if (hourly) cursor.setMinutes(0, 0, 0);
+    else cursor.setHours(0, 0, 0, 0);
+    while (cursor.getTime() / 1000 > span.from - (hourly ? HOUR : DAY)) {
+        starts.push(cursor.getTime() / 1000);
+        if (hourly) cursor.setHours(cursor.getHours() - 1);
+        else cursor.setDate(cursor.getDate() - 1);
+    }
+    const rows = starts.map((start, position) => {
+        const end = position === 0 ? Infinity : starts[position - 1];
+        const cells = series.map((entry) => {
+            let max = null;
+            for (const point of entry.points) {
+                if (point.ts >= start && point.ts < end) max = max === null ? point.value : Math.max(max, point.value);
+            }
+            return max === null ? '-' : pct(max);
+        });
+        const date = new Date(start * 1000);
+        const day = hourly ? clock(start) : date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+        const label = `${weekdayName(date)} ${day}`;
+        return { label, cells };
+    });
+    const table = h('table', {},
+        h('thead', {}, h('tr', {},
+            h('th', { scope: 'col', text: hourly ? tr('table_hour', 'Hour') : tr('table_day', 'Day') }),
+            ...series.map((entry) => h('th', { scope: 'col', text: columnName(entry) })))),
+        h('tbody', {}, ...rows.map((row) => h('tr', {}, h('th', { scope: 'row', text: row.label }), ...row.cells.map((cell) => h('td', { text: cell }))))));
+    const note = hourly ? tr('table_note_hour', 'Highest reading in each hour') : tr('table_note_day', 'Highest reading on each day');
+    const rowCount = fmt(tr('rows', '{count} rows · {range}'), { count: rows.length, range: rangeName(state.history.range) });
+    byId('historyTableBody').replaceChildren(
+        h('p', { class: 'muted', text: `${note} · ${rowCount}` }),
+        h('div', { class: 'table-scroll' }, table));
+}
+
+// ---------- Consumption bars ----------
+
+function niceStep(raw) {
+    const power = 10 ** Math.floor(Math.log10(Math.max(raw, 1e-6)));
+    for (const factor of [1, 2, 2.5, 5, 10]) if (factor * power >= raw) return factor * power;
+    return 10 * power;
+}
+
+function renderConsumption() {
+    const root = byId('consumptionChart');
+    const consumption = state.history.consumption || { unit: 'day', starts: [], providers: [] };
+    const hourly = consumption.unit === 'hour';
+    byId('consumptionTitle').textContent = hourly ? tr('consumption_hourly', 'Quota used per hour') : tr('consumption_daily', 'Quota used per day');
+    const shown = consumption.providers
+        .filter((provider) => !state.hidden.has(provider.id))
+        .sort((a, b) => providerRank(a.id) - providerRank(b.id));
+    const labels = new Set(consumption.providers.map((provider) => provider.label));
+    byId('consumptionMeta').textContent = labels.size === 1
+        ? fmt(tr('consumption_meta', 'percentage points of the {label} quota, counted once'), { label: Array.from(labels)[0] })
+        : tr('consumption_meta_mixed', "percentage points of each provider's longest quota, counted once");
+    let max = 0;
+    for (const provider of shown) for (const value of provider.values) max = Math.max(max, value);
+    if (!shown.length || max <= 0) {
+        root.replaceChildren(h('p', { class: 'muted empty', text: tr('waiting_history', 'Waiting for history data') }));
+        return;
+    }
+
+    const width = Math.max(300, Math.floor(root.clientWidth));
+    const height = 220;
+    const margin = { top: 12, right: 8, bottom: 30, left: 40 };
+    const count = consumption.starts.length;
+    const step = niceStep(max / 4);
+    const yMax = Math.max(step, Math.ceil(max / step) * step);
+    const plotWidth = width - margin.left - margin.right;
+    const plotBottom = height - margin.bottom;
+    const y = (value) => plotBottom - (value / yMax) * (plotBottom - margin.top);
+    const svg = s('svg', { class: 'chart', width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': byId('consumptionTitle').textContent });
+    for (let value = 0; value <= yMax + 1e-9; value += step) {
+        svg.append(s('line', { class: value === 0 ? 'axis-line' : 'grid-line', x1: margin.left, x2: width - margin.right, y1: y(value), y2: y(value) }));
+        svg.append(s('text', { class: 'tick', x: margin.left - 6, y: y(value) + 4, 'text-anchor': 'end', text: decimal(value, step < 1 ? 1 : 0) }));
+    }
+
+    const groupWidth = plotWidth / count;
+    const bars = shown.length;
+    const barWidth = Math.max(2, Math.min(22, (groupWidth * 0.78 - 2 * (bars - 1)) / bars));
+    const inner = bars * barWidth + 2 * (bars - 1);
+    const labelEvery = hourly ? (width < 520 ? 6 : 3) : count <= 7 ? 1 : (width < 520 ? 7 : 5);
+    const hover = s('rect', { class: 'bar-hover', visibility: 'hidden', y: margin.top, height: plotBottom - margin.top, width: groupWidth });
+    svg.append(hover);
+    consumption.starts.forEach((start, index) => {
+        const groupX = margin.left + index * groupWidth;
+        const barsX = groupX + (groupWidth - inner) / 2;
+        shown.forEach((provider, position) => {
+            const value = provider.values[index] || 0;
+            if (value <= 0.05) return;
+            svg.append(s('path', { d: roundedTop(barsX + position * (barWidth + 2), y(value), barWidth, plotBottom), fill: providerColor(provider.id) }));
+        });
+        const date = new Date(start * 1000);
+        if (index % labelEvery === 0) {
+            const text = hourly ? pad(date.getHours()) : count <= 7 ? `${weekdayName(date)} ${date.getDate()}` : String(date.getDate());
+            svg.append(s('text', { class: 'tick', x: groupX + groupWidth / 2, y: height - 10, 'text-anchor': 'middle', text }));
+        }
+        const title = hourly
+            ? `${weekdayName(date)} ${clock(start)}-${clock(start + HOUR)}`
+            : `${weekdayName(date)} ${date.toLocaleDateString([], { day: 'numeric', month: 'short' })}`;
+        const rows = [h('div', { class: 'tip-head', text: title })];
+        for (const provider of shown) {
+            const amount = fmt(tr('pp', '{value} pp'), { value: decimal(provider.values[index] || 0) });
+            rows.push(tipRow(provider.id, amount, providerLabel(provider.id)));
+        }
+        const hit = s('rect', { class: 'hit', x: groupX, y: margin.top, width: groupWidth, height: plotBottom - margin.top });
+        hit.addEventListener('pointermove', (event) => {
+            hover.setAttribute('x', groupX);
+            hover.setAttribute('visibility', 'visible');
+            showTip(rows, event.clientX, event.clientY);
+        });
+        hit.addEventListener('pointerleave', () => {
+            hover.setAttribute('visibility', 'hidden');
+            hideTip();
+        });
+        svg.append(hit);
+    });
+    root.replaceChildren(svg);
+}
+
+function roundedTop(x, top, width, base) {
+    const radius = Math.max(0, Math.min(4, width / 2, base - top));
+    return `M${x},${base}V${top + radius}Q${x},${top} ${x + radius},${top}H${x + width - radius}Q${x + width},${top} ${x + width},${top + radius}V${base}Z`;
+}
+
+// ---------- Heatmap ----------
+
+function renderHeatmap() {
+    const settings = state.status.settings || {};
+    const section = byId('heatmapSection');
     section.hidden = settings.heatmap_enabled === false;
     if (section.hidden) return;
 
-    const root = document.getElementById('heatmap');
-    const nodes = [];
-    for (const entry of heatmapSeries(quotaSeries(rows, fields, status.providers || []))) {
-        const hours = new Array(24).fill(0);
-        for (const run of cycleRuns(entry.points)) {
-            for (let index = 1; index < run.length; index++) {
-                const delta = run[index].value - run[index - 1].value;
-                if (delta > 0) hours[new Date(run[index].ts * 1000).getHours()] += delta;
-            }
+    const heatmap = state.history.heatmap || { days: 28, providers: [] };
+    const list = [...heatmap.providers].sort((a, b) => providerRank(a.id) - providerRank(b.id));
+    if (!list.some((provider) => provider.id === state.heatProvider)) state.heatProvider = list.length ? list[0].id : null;
+    byId('heatmapControl').replaceChildren(...list.map((provider) => h('button', {
+        type: 'button',
+        'aria-pressed': provider.id === state.heatProvider ? 'true' : 'false',
+        onclick: () => {
+            state.heatProvider = provider.id;
+            writeStored('agentpulse-heat-provider', provider.id);
+            safely(renderHeatmap, 'heatmapGrid');
+        },
+    }, dot(provider.id), providerLabel(provider.id))));
+
+    const grid = byId('heatmapGrid');
+    const chosen = list.find((provider) => provider.id === state.heatProvider);
+    if (!chosen) {
+        grid.replaceChildren(h('p', { class: 'muted empty', text: tr('waiting_history', 'Waiting for history data') }));
+        byId('heatmapNote').textContent = '';
+        return;
+    }
+
+    let max = 0;
+    let peak = null;
+    chosen.cells.forEach((row, weekday) => row.forEach((value, hour) => {
+        if (value > max) {
+            max = value;
+            peak = { weekday, hour, value };
         }
-        // Each provider on its own scale: the rows show when it is used, and
-        // the tooltips carry the amounts.
-        let max = 1;
-        for (const value of hours) max = Math.max(max, value);
-        const name = providerLabel(entry.provider);
-        const label = document.createElement('div');
-        label.className = 'heatmap-label';
-        label.textContent = name;
-        nodes.push(label);
-        hours.forEach((value, hour) => {
-            const cell = document.createElement('div');
-            cell.className = 'heatmap-cell';
-            cell.title = `${name} ${String(hour).padStart(2, '0')}:00 · ${Math.round(value * 10) / 10} pp`;
-            cell.style.background = providerColor(entry.provider);
-            cell.style.opacity = String(0.14 + 0.86 * value / max);
-            cell.textContent = hour % 6 === 0 ? String(hour) : '';
+    }));
+    const color = providerColor(chosen.id);
+    const nodes = [h('span', { class: 'heat-corner' })];
+    for (let hour = 0; hour < 24; hour++) nodes.push(h('span', { class: 'heat-hour', text: hour % 3 === 0 ? String(hour) : '' }));
+    chosen.cells.forEach((row, weekday) => {
+        const name = tr(`weekday_${weekday}`, String(weekday));
+        nodes.push(h('span', { class: 'heat-day', text: name }));
+        row.forEach((value, hour) => {
+            const cell = h('span', { class: 'heat-cell' });
+            if (value > 0 && max > 0) cell.style.background = `color-mix(in srgb, ${color} ${Math.round(18 + 82 * value / max)}%, var(--heat-empty))`;
+            const text = fmt(tr('heatmap_cell', '{day} {start}-{end} · average {value} pp'), {
+                day: name, start: `${pad(hour)}:00`, end: `${pad((hour + 1) % 24)}:00`, value: decimal(value),
+            });
+            const content = [h('div', { class: 'tip-head', text: providerLabel(chosen.id) }), h('div', { text })];
+            cell.addEventListener('pointermove', (event) => showTip(content, event.clientX, event.clientY));
+            cell.addEventListener('pointerleave', hideTip);
             nodes.push(cell);
         });
+    });
+    grid.replaceChildren(...nodes);
+    grid.setAttribute('role', 'img');
+    const scale = byId('heatmapScale');
+    scale.style.background = `linear-gradient(90deg, var(--heat-empty), ${color})`;
+    if (peak) {
+        const note = fmt(tr('heatmap_peak', 'Busiest: {day} {start}-{end}, on average {value} pp of the {label} quota. Last {days} days.'), {
+            day: tr(`weekday_${peak.weekday}`, ''), start: `${pad(peak.hour)}:00`, end: `${pad((peak.hour + 1) % 24)}:00`,
+            value: decimal(peak.value), label: chosen.label, days: heatmap.days,
+        });
+        byId('heatmapNote').textContent = note;
+        grid.setAttribute('aria-label', note);
+    } else {
+        byId('heatmapNote').textContent = tr('waiting_history', 'Waiting for history data');
+        grid.setAttribute('aria-label', byId('heatmapNote').textContent);
     }
-    document.getElementById('heatmapMeta').textContent = tr('heatmap_meta', 'positive usage deltas by local hour');
-    root.replaceChildren(...(nodes.length ? nodes : [emptyMuted(tr('waiting_history', 'Waiting for history data'))]));
 }
 
-function formatUpdated(ts) {
-    if (!ts) return tr('waiting', 'waiting');
-    return fmt(tr('ago', '{duration} ago'), { duration: formatCountdown(Date.now() / 1000 - ts) });
+// ---------- Footer ----------
+
+function renderFooter() {
+    const status = state.status;
+    const parts = [fmt(tr('footer_privacy', 'Runs only on {host} - no analytics, tokens never leave the app'), { host: status.privacy.bind })];
+    for (const provider of providers()) {
+        const versions = (provider.installations || []).map((item) => `${item.name} ${item.version}`).join(', ') || tr('not_detected', 'not detected');
+        parts.push(`${provider.label}: ${versions}`);
+    }
+    parts.push(`${status.app.name} ${status.app.version}`);
+    byId('siteFooter').textContent = parts.join(' · ');
 }
 
-function formatCountdown(seconds) {
-    seconds = Math.max(0, Math.floor(seconds));
-    if (seconds < 60) return `${seconds}s`;
-    const m = Math.floor(seconds / 60);
-    if (m < 60) return `${m}m`;
-    const h = Math.floor(m / 60);
-    return `${h}h ${m % 60}m`;
+// ---------- Settings drawer ----------
+
+let drawerOpener = null;
+
+function openDrawer() {
+    const drawer = byId('settingsDrawer');
+    drawerOpener = document.activeElement;
+    drawer.removeAttribute('inert');
+    drawer.setAttribute('aria-hidden', 'false');
+    drawer.classList.add('open');
+    byId('drawerBackdrop').classList.add('open');
+    byId('openSettings').setAttribute('aria-expanded', 'true');
+    document.body.classList.add('drawer-open');
+    byId('settingsStatus').textContent = '';
+    loadSettings();
+    requestAnimationFrame(() => byId('closeSettings').focus());
 }
 
-function hoursUntilLocalTime(value) {
-    const [h, m] = String(value || '18:00').split(':').map(Number);
-    const now = new Date();
-    const target = new Date(now);
-    target.setHours(Number.isFinite(h) ? h : 18, Number.isFinite(m) ? m : 0, 0, 0);
-    if (target <= now) target.setDate(target.getDate() + 1);
-    return (target - now) / 3600000;
+function closeDrawer() {
+    const drawer = byId('settingsDrawer');
+    if (!drawer.classList.contains('open')) return;
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    drawer.setAttribute('inert', '');
+    byId('drawerBackdrop').classList.remove('open');
+    byId('openSettings').setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('drawer-open');
+    if (drawerOpener && drawerOpener.focus) drawerOpener.focus();
 }
 
-function secondsUntilIso(value) {
-    const ts = Date.parse(value || '');
-    if (!Number.isFinite(ts)) return 0;
-    return Math.max(0, (ts - Date.now()) / 1000);
+// Keeps Tab inside the open drawer, the way a modal dialog behaves.
+function trapFocus(event) {
+    const drawer = byId('settingsDrawer');
+    if (event.key !== 'Tab' || !drawer.classList.contains('open')) return;
+    const candidates = Array.from(drawer.querySelectorAll('button, input, textarea, select, a[href]'));
+    const focusable = candidates.filter((node) => !node.disabled && node.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        last.focus();
+        event.preventDefault();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        first.focus();
+        event.preventDefault();
+    }
 }
 
-// Compares the current quota cycle's pace to past cycles at the same age -
-// the one signal the single-cycle burn rate above can't give: whether this
-// cycle is unusually heavy, not just whether it's on pace to run out.
-function trendText(trend) {
-    if (!trend || !Number.isFinite(trend.delta_pct) || !trend.cycles_compared) return null;
-    const delta = Math.round(trend.delta_pct);
-    const signed = `${delta > 0 ? '+' : ''}${delta}pp`;
-    return fmt(tr('vs_usual_pace', '{delta} vs usual pace ({n} cycles)'), { delta: signed, n: trend.cycles_compared });
-}
-
-function emptyMuted(text) {
-    const p = document.createElement('p');
-    p.className = 'muted';
-    p.textContent = text;
-    return p;
-}
-
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function loadSettings() {
+    let data;
+    try {
+        const response = await fetch('/api/settings', { cache: 'no-store', headers: { 'X-AgentsPulse-Token': authToken } });
+        if (!response.ok) {
+            byId('settingsStatus').textContent = tr('session_expired', 'session expired - reopen the dashboard from the tray menu');
+            return;
+        }
+        data = await response.json();
+    } catch {
+        return;
+    }
+    const settings = data.settings || {};
+    byId('autostartEnabled').checked = !!settings.autostart;
+    byId('codexEnabled').checked = !!settings.codex_enabled;
+    byId('kimiEnabled').checked = !!settings.kimi_enabled;
+    byId('tooltipFields').value = (settings.tooltip_fields || []).join(', ');
+    byId('thresholdClaude5h').value = (settings.alert_thresholds_five_hour || []).join(', ');
+    byId('thresholdClaude7d').value = (settings.alert_thresholds_seven_day || []).join(', ');
+    byId('thresholdCodex5h').value = (settings.alert_thresholds_codex_five_hour || []).join(', ');
+    byId('thresholdCodex7d').value = (settings.alert_thresholds_codex_seven_day || []).join(', ');
+    byId('thresholdKimi5h').value = (settings.alert_thresholds_kimi_five_hour || []).join(', ');
+    byId('thresholdKimi7d').value = (settings.alert_thresholds_kimi_seven_day || []).join(', ');
+    byId('predictionEnabled').checked = settings.prediction_enabled !== false;
+    byId('predictionDayEnd').value = settings.prediction_day_end_time || '18:00';
+    byId('heatmapEnabled').checked = settings.heatmap_enabled !== false;
+    byId('quietHoursEnabled').checked = !!settings.quiet_hours_enabled;
+    byId('quietHoursStart').value = settings.quiet_hours_start || '22:00';
+    byId('quietHoursEnd').value = settings.quiet_hours_end || '08:00';
+    for (const input of document.querySelectorAll('input[name="iconStyle"]')) input.checked = input.value === (settings.icon_style || 'bars');
+    // One command per line: each runs on its own, exactly like the array in the settings file.
+    byId('resetCommand').value = (settings.on_reset_command || []).join('\n');
+    byId('thresholdCommand').value = (settings.on_threshold_command || []).join('\n');
 }
 
 function parseList(value) {
-    return value.split(',').map(s => s.trim()).filter(Boolean);
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 function parseLines(value) {
-    return value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 }
 
 function parseNumbers(value) {
-    return parseList(value).map(Number).filter(n => Number.isFinite(n));
+    return parseList(value).map(Number).filter((number) => Number.isFinite(number));
 }
 
-document.getElementById('settingsForm').addEventListener('submit', async (event) => {
+async function saveSettings(event) {
     event.preventDefault();
+    const style = document.querySelector('input[name="iconStyle"]:checked');
     const payload = {
-        autostart: document.getElementById('autostartEnabled').checked,
-        codex_enabled: document.getElementById('codexEnabled').checked,
-        kimi_enabled: document.getElementById('kimiEnabled').checked,
-        tooltip_fields: parseList(document.getElementById('tooltipFields').value),
-        alert_thresholds_five_hour: parseNumbers(document.getElementById('thresholdClaude5h').value),
-        alert_thresholds_seven_day: parseNumbers(document.getElementById('thresholdClaude7d').value),
-        alert_thresholds_codex_five_hour: parseNumbers(document.getElementById('thresholdCodex5h').value),
-        alert_thresholds_codex_seven_day: parseNumbers(document.getElementById('thresholdCodex7d').value),
-        alert_thresholds_kimi_five_hour: parseNumbers(document.getElementById('thresholdKimi5h').value),
-        alert_thresholds_kimi_seven_day: parseNumbers(document.getElementById('thresholdKimi7d').value),
-        prediction_enabled: document.getElementById('predictionEnabled').checked,
-        prediction_day_end_time: document.getElementById('predictionDayEnd').value || '18:00',
-        heatmap_enabled: document.getElementById('heatmapEnabled').checked,
-        quiet_hours_enabled: document.getElementById('quietHoursEnabled').checked,
-        quiet_hours_start: document.getElementById('quietHoursStart').value || '22:00',
-        quiet_hours_end: document.getElementById('quietHoursEnd').value || '08:00',
-        on_reset_command: parseLines(document.getElementById('resetCommand').value),
-        on_threshold_command: parseLines(document.getElementById('thresholdCommand').value),
+        autostart: byId('autostartEnabled').checked,
+        codex_enabled: byId('codexEnabled').checked,
+        kimi_enabled: byId('kimiEnabled').checked,
+        tooltip_fields: parseList(byId('tooltipFields').value),
+        alert_thresholds_five_hour: parseNumbers(byId('thresholdClaude5h').value),
+        alert_thresholds_seven_day: parseNumbers(byId('thresholdClaude7d').value),
+        alert_thresholds_codex_five_hour: parseNumbers(byId('thresholdCodex5h').value),
+        alert_thresholds_codex_seven_day: parseNumbers(byId('thresholdCodex7d').value),
+        alert_thresholds_kimi_five_hour: parseNumbers(byId('thresholdKimi5h').value),
+        alert_thresholds_kimi_seven_day: parseNumbers(byId('thresholdKimi7d').value),
+        prediction_enabled: byId('predictionEnabled').checked,
+        prediction_day_end_time: byId('predictionDayEnd').value || '18:00',
+        heatmap_enabled: byId('heatmapEnabled').checked,
+        quiet_hours_enabled: byId('quietHoursEnabled').checked,
+        quiet_hours_start: byId('quietHoursStart').value || '22:00',
+        quiet_hours_end: byId('quietHoursEnd').value || '08:00',
+        on_reset_command: parseLines(byId('resetCommand').value),
+        on_threshold_command: parseLines(byId('thresholdCommand').value),
     };
+    if (style) payload.icon_style = style.value;
     const result = await postJson('/api/settings', payload);
     const saved = result.restart_required
         ? tr('restart_required', 'settings saved - restart the app to apply the Codex or Kimi monitoring change')
         : tr('saved', 'settings saved');
-    document.getElementById('settingsStatus').textContent = result.ok
+    byId('settingsStatus').textContent = result.ok
         ? saved
         : fmt(tr('error', 'error: {errors}'), { errors: (result.errors || []).join(', ') });
-});
+    if (result.ok) {
+        state.historyKey = '';
+        refresh();
+    }
+}
 
-document.getElementById('testReset').addEventListener('click', () => testEvent('reset'));
-document.getElementById('testThreshold').addEventListener('click', () => testEvent('threshold'));
-
-async function testEvent(event) {
-    const result = await postJson('/api/test-event', { event });
-    document.getElementById('settingsStatus').textContent = result.ok
-        ? fmt(tr('test_fired', 'test {event} fired'), { event })
+async function testEvent(eventName) {
+    const result = await postJson('/api/test-event', { event: eventName });
+    byId('settingsStatus').textContent = result.ok
+        ? fmt(tr('test_fired', 'test {event} fired'), { event: eventName })
         : fmt(tr('test_failed', 'test failed: {errors}'), { errors: (result.errors || []).join(', ') || tr('unknown_error', 'unknown error') });
 }
 
+// ---------- Wiring ----------
+
+function selectRange(range) {
+    if (!RANGE_SECONDS[range] || range === state.range) return;
+    state.range = range;
+    state.historyKey = '';
+    writeStored('agentpulse-range', range);
+    syncRangeControl();
+    refresh();
+}
+
+function syncRangeControl() {
+    for (const button of byId('rangeControl').querySelectorAll('button')) {
+        button.setAttribute('aria-pressed', button.dataset.range === state.range ? 'true' : 'false');
+    }
+    byId('exportCsv').href = `/api/history.csv?range=${encodeURIComponent(state.range)}`;
+}
+
+for (const button of byId('rangeControl').querySelectorAll('button')) button.addEventListener('click', () => selectRange(button.dataset.range));
+byId('openSettings').addEventListener('click', openDrawer);
+byId('closeSettings').addEventListener('click', closeDrawer);
+byId('drawerBackdrop').addEventListener('click', closeDrawer);
+byId('settingsForm').addEventListener('submit', saveSettings);
+byId('testReset').addEventListener('click', () => testEvent('reset'));
+byId('testThreshold').addEventListener('click', () => testEvent('threshold'));
+byId('historyTable').addEventListener('toggle', () => {
+    if (byId('historyTable').open && state.history) safely(renderHistoryTable, 'historyTableBody');
+});
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeDrawer();
+    trapFocus(event);
+});
+
+// Charts redraw at their container's width, so text keeps its size.
 let resizeFrame = 0;
-window.addEventListener('resize', () => {
+let lastWidth = 0;
+new ResizeObserver(() => {
     cancelAnimationFrame(resizeFrame);
     resizeFrame = requestAnimationFrame(() => {
-        if (state.status && state.history) renderCharts();
+        const width = byId('historyChart').clientWidth;
+        if (width === lastWidth || !state.status || !state.history) return;
+        lastWidth = width;
+        renderCharts();
     });
-});
+}).observe(document.querySelector('main'));
 
 // Nothing is fetched while the tab is in the background; coming back
 // refreshes immediately instead of waiting for the next interval.
@@ -795,8 +1346,7 @@ document.addEventListener('visibilitychange', () => {
     if (!document.hidden) refresh();
 });
 
-loadI18n().then(() => {
-    refresh();
-    loadSettings();
-});
+syncRangeControl();
+loadI18n().then(refresh);
 setInterval(refresh, 15000);
+setInterval(tickLive, 1000);

@@ -19,19 +19,20 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 ### Daily visible value
 
-- **Live tray icon** - one ring per provider shows current 5-hour Claude, Codex, and Kimi usage directly in the taskbar and adapts to your taskbar's light or dark theme.
-- **Detail popup** - left-click the icon to see a polished breakdown of every quota type (session, weekly, per-model variants, paid overage), the time until each resets, and your account email and plan. Burn-rate predictions show whether you're on pace to use up the quota before it resets.
+- **Live tray icon** - one bar per provider shows current Claude, Codex, and Kimi session usage directly in the taskbar (or rings, or your highest percentage as a number) and adapts to your taskbar's light or dark theme. When every provider is at its limit, the icon counts down to the reset and shows a check mark the moment you can work again.
+- **Detail popup** - left-click the icon to see a polished breakdown of every quota type (session, weekly, per-model variants, paid overage), each with its status, a lighter segment projecting usage to the reset, and the time until it resets, plus your account email and plan. Buttons open the dashboard or fetch fresh data.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
 ### Proactive protection
 
+- **Forecasts** - every quota tells you whether it lasts until its reset: **On track**, **Tight**, or **Limit ~15:47** when it will run out first. Sessions are projected from their current pace and weekly limits from your own past weeks, so a busy morning is not mistaken for a week that runs out.
 - **Smart alerts** - Windows desktop notifications fire when you cross configurable thresholds (e.g. 50%, 80%, 95% for the session; 95% for the weekly quota). Time-aware mode suppresses alerts when your pace is still within budget, reducing noise.
 - **Quiet hours** - defer all desktop notifications during a configured time window (e.g. overnight) so you aren't woken by alerts.
 - **Event commands** - run any shell command automatically when a quota resets or a threshold is crossed. Use this to resume a Claude Code session the moment your session quota refreshes, send a Slack message, or check for app updates. Commands run silently in the background without stealing focus.
 
 ### Visual quality
 
-- **Local dashboard** - open a browser dashboard (localhost) from the tray menu to explore usage history across 24h, 7d, or 30d. Includes a burn-rate chart, a heatmap showing which hours of the day you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme, is shown in your language, and has a settings panel for configuring alerts, autostart, and display options.
+- **Local dashboard** - open a browser dashboard (localhost) from the tray menu or the popup. It starts with a one-line summary and a card per provider with every quota's status and forecast, followed by usage history across 24h, 7d, or 30d in session and weekly panels with a crosshair tooltip and a data table, consumption bars that count each piece of work once, a weekday-by-hour heatmap of when you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme, is shown in your language, and has a slide-out settings panel for alerts, the tray icon style, autostart, and display options.
 
 ### Reliability
 
@@ -62,8 +63,8 @@ No installer, no admin rights required. To start with Windows, right-click the t
 
 1. Log in to Claude Code if you haven't already (`claude login`).
 2. Run `AgentsPulse.exe`.
-3. Hover over the `AP` tray icon for a quick summary, or left-click for the full popup.
-4. To open the dashboard, right-click the tray icon and choose **Open Dashboard**.
+3. Hover over the tray icon for a quick summary, or left-click for the full popup.
+4. To open the dashboard, click **Dashboard** in the popup, or right-click the tray icon and choose **Open Dashboard**.
 
 ## Configuration
 
