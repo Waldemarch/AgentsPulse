@@ -34,6 +34,7 @@ from .settings import (
     KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
     get_alert_thresholds,
 )
+from .statusline import format_statusline
 from .tray_icon import (
     create_countdown_image, create_icon_image, create_ready_image, create_status_image,
     taskbar_uses_light_theme, watch_theme_change,
@@ -123,6 +124,7 @@ class AgentPulse:
         self._countdown_shown = False
         self._ready_until = 0.0
         self._refresh_lock = threading.Lock()
+        self._last_outlooks: dict[str, dict[str, Outlook]] = {}
 
         self._popup_lock = threading.Lock()
         self._popup_open = False
@@ -288,8 +290,9 @@ class AgentPulse:
     def _render_tray(self) -> None:
         data = self._last_response
         sections = self._secondary_tooltip_sections()
+        self._last_outlooks = self.quota_outlooks()
         self._refresh_icon(time.time())
-        self.icon.title = format_tooltip(data, sections, self.quota_outlooks())
+        self.icon.title = format_tooltip(data, sections, self._last_outlooks)
 
     def _refresh_icon(self, now: float) -> None:
         """Redraw the tray icon when what it shows has changed."""
@@ -345,6 +348,26 @@ class AgentPulse:
             outlooks[name] = usage_outlooks(snapshot.usage, series.get(name, {}), now=now, forecast=_settings.PREDICTION_ENABLED)
         return outlooks
 
+    def statusline_text(self, *, provider: str | None = None, color: bool = True) -> str:
+        """Return the one-line usage summary for the Claude Code status line.
+
+        Public: the dashboard serves it at ``/api/statusline``.  It reuses the
+        usage and outlooks of the last tray update, so a status line refresh
+        costs neither an API request nor a forecast computation.
+
+        Parameters
+        ----------
+        provider
+            Show only this provider; every active provider by default.
+        color
+            Colour tight quotas and limits with ANSI escape sequences.
+        """
+        secondary = [(name, self._secondary_responses.get(name) or {}) for name, _cache in self.secondary_providers()]
+        sections = [('claude', self._last_response), *secondary]
+        if provider is not None:
+            sections = [section for section in sections if section[0] == provider]
+        return format_statusline(sections, self._last_outlooks, fields=_settings.TOOLTIP_FIELDS, now=time.time(), color=color)
+
     def refresh_now(self) -> None:
         """Fetch fresh usage of every provider in the background.
 
@@ -367,8 +390,19 @@ class AgentPulse:
 
         Public: the dashboard calls this after a successful save.
         """
+        self._serve_statusline()
         if self._last_response:
             self._render_tray()
+
+    def _serve_statusline(self) -> None:
+        """Keep the dashboard server running for the Claude Code status line while that is turned on."""
+        if not _settings.STATUSLINE_ENABLED:
+            return
+        try:
+            self.dashboard.start()
+        except OSError:
+            # Every port the dashboard may use is taken; the status line stays empty.
+            return
 
     def _on_theme_changed(self) -> None:
         light = taskbar_uses_light_theme()
@@ -672,6 +706,7 @@ class AgentPulse:
             if not api_headers():
                 icon.notify(f"{T['warn_no_token']}\n{T['warn_login']}", T['popup_title'])
             threading.Thread(target=watch_theme_change, args=(self._on_theme_changed,), daemon=True).start()
+            self._serve_statusline()
             self.poll_loop()
         except Exception:
             crash_log(traceback.format_exc())

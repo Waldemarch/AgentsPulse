@@ -974,6 +974,75 @@ class TestHistoryPersistence(unittest.TestCase):
         self.assertEqual(len(history.rows('24h')), 1)
 
 
+class TestStatuslineEndpoint(unittest.TestCase):
+    """Tests for GET /api/statusline, the Claude Code status line."""
+
+    def setUp(self):
+        self.app = MagicMock()
+        self.app.statusline_text.return_value = 'Claude 5h 42% ↺14:30'
+        self.server = DashboardServer(self.app, port=0, history_path=_temp_history_path(self))
+        self.server.start()
+        self.port = self.server._httpd.server_address[1]
+        self.addCleanup(self.server.stop)
+        enabled = patch('agentpulse.settings.STATUSLINE_ENABLED', True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
+
+    def _get(self, path, *, host=None):
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.request('GET', path, headers={'Host': host or f'127.0.0.1:{self.port}'})
+        response = connection.getresponse()
+        return response, response.read()
+
+    def test_serves_one_line_of_plain_text_without_a_session_token(self):
+        response, body = self._get('/api/statusline')
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.getheader('Content-Type'), 'text/plain; charset=utf-8')
+        self.assertEqual(body.decode('utf-8'), 'Claude 5h 42% ↺14:30\n')
+        self.app.statusline_text.assert_called_once_with(provider=None, color=True)
+
+    def test_provider_and_color_parameters(self):
+        response, _body = self._get('/api/statusline?provider=claude&color=0')
+
+        self.assertEqual(response.status, 200)
+        self.app.statusline_text.assert_called_once_with(provider='claude', color=False)
+
+    def test_unknown_provider_is_rejected(self):
+        response, _body = self._get('/api/statusline?provider=gemini')
+
+        self.assertEqual(response.status, 400)
+        self.app.statusline_text.assert_not_called()
+
+    def test_not_served_while_turned_off(self):
+        with patch('agentpulse.settings.STATUSLINE_ENABLED', False):
+            response, _body = self._get('/api/statusline')
+
+        self.assertEqual(response.status, 404)
+        self.app.statusline_text.assert_not_called()
+
+    def test_turning_it_on_needs_no_restart(self):
+        with patch('agentpulse.settings.STATUSLINE_ENABLED', False):
+            before, _body = self._get('/api/statusline')
+        after, _body = self._get('/api/statusline')
+
+        self.assertEqual((before.status, after.status), (404, 200))
+
+    def test_forged_host_is_rejected(self):
+        response, _body = self._get('/api/statusline', host='attacker.example')
+
+        self.assertEqual(response.status, 403)
+        self.app.statusline_text.assert_not_called()
+
+    def test_web_pages_cannot_read_it(self):
+        response, _body = self._get('/api/statusline')
+
+        self.assertIsNone(response.getheader('Access-Control-Allow-Origin'))
+        self.assertEqual(response.getheader('Cache-Control'), 'no-store')
+        self.assertEqual(response.getheader('X-Content-Type-Options'), 'nosniff')
+
+
 class TestDashboardServer(unittest.TestCase):
     def test_start_uses_next_port_when_configured_port_is_busy(self):
         sock = socket.socket()

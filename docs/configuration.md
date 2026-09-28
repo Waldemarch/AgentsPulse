@@ -44,7 +44,7 @@ Threshold lookup uses a fallback chain: exact match (e.g. `alert_thresholds_seve
 
 ## Tooltip fields
 
-The tray tooltip shows a quick usage summary when you hover over the icon. By default, it displays the session (5h) and weekly (7d) quotas. Use `tooltip_fields` to choose which usage fields appear in the tooltip.
+The tray tooltip shows a quick usage summary when you hover over the icon. By default, it displays the session (5h) and weekly (7d) quotas. Use `tooltip_fields` to choose which usage fields appear in the tooltip and in the [Claude Code status line](#claude-code-status-line).
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -153,7 +153,7 @@ Use **Open Dashboard** from the tray context menu or the popup's **Dashboard** b
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, predictions, heatmap, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, predictions, heatmap, the Claude Code status line, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
 
 History settings:
 
@@ -187,6 +187,45 @@ Quiet hours settings:
 | `quiet_hours_end` | `"08:00"` | Local HH:MM quiet-hours end. Windows that cross midnight are supported |
 
 Event commands still run during quiet hours; only desktop notifications are deferred and deduplicated.
+
+## Claude Code status line
+
+Your quotas can appear in the status line below the Claude Code prompt:
+
+```text
+Claude 5h 42% ↺14:30 · 7d 61% | Codex 5h 10% ↺16:05 · 7d 3%
+```
+
+1. Turn on **Show usage in the Claude Code status line** in the dashboard's **Settings** panel, or set `statusline_enabled` to `true`. The local dashboard server then starts together with the app.
+2. Copy the entry the panel shows into `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "curl.exe -sf --max-time 1 http://127.0.0.1:8766/api/statusline"
+  }
+}
+```
+
+The panel's entry uses the port the server actually runs on: `8766`, or the next free port when that one is taken. `curl.exe` ships with Windows 10 (version 1803 and later) and Windows 11; the `.exe` keeps the command working in Windows PowerShell, where `curl` means `Invoke-WebRequest`.
+
+The line shows the tray tooltip's quota fields (`tooltip_fields`) for every active provider. Session windows add the local time of their reset (`↺14:30`). A **Tight** quota turns yellow; a quota heading for its limit or at its limit turns red and names its status, such as **Limit ~13:55**, or **Limit reached** with the time it resets. The text comes from the app's latest reading, so Claude Code's frequent refreshes never cause an API request. While the app is not running, `curl.exe` prints nothing and the status line stays empty.
+
+Query parameters change what the line shows (quote the URL inside the command when you add one):
+
+| Parameter | Effect |
+|-----------|--------|
+| `provider=claude` | Only this provider: `claude`, `codex`, or `kimi` |
+| `color=0` | Plain text without ANSI color codes |
+
+For example: `"command": "curl.exe -sf --max-time 1 \"http://127.0.0.1:8766/api/statusline?provider=claude\""`.
+
+`/api/statusline` is read-only and follows the dashboard's local-only rules: it answers only loopback clients with a loopback `Host` header, and only while the status line is turned on. Like the dashboard's status data it needs no session token, and it sends no CORS headers, so web pages cannot read it.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `statusline_enabled` | `false` | Serve the Claude Code status line at `/api/statusline`; the local dashboard server starts together with the app. Also available in the dashboard's settings panel |
 
 ## Language
 

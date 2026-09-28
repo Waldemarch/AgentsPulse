@@ -21,6 +21,7 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 - **Live tray icon** - one bar per provider shows current Claude, Codex, and Kimi session usage directly in the taskbar (or rings, or your highest percentage as a number) and adapts to your taskbar's light or dark theme. When every provider is at its limit, the icon counts down to the reset and shows a check mark the moment you can work again.
 - **Detail popup** - left-click the icon to see a polished breakdown of every quota type (session, weekly, per-model variants, paid overage), each with its status, a lighter segment projecting usage to the reset, and the time until it resets, plus your account email and plan. Buttons open the dashboard or fetch fresh data.
+- **Claude Code status line** - see your session and weekly usage right below the Claude Code prompt, with the time the session resets and a colored warning when a quota is tight or about to run out. The dashboard shows the one entry to paste into `~/.claude/settings.json`, and the line comes from the app's latest reading, so it never adds API requests.
 - **Claude Code versions** - the popup footer shows the Claude Code CLI version and any IDE extension versions (VS Code, Cursor, Windsurf), so you always know what's installed.
 
 ### Proactive protection
@@ -43,7 +44,7 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 - **13 languages** - English, German, Spanish, French, Hindi, Indonesian, Italian, Japanese, Korean, Portuguese (Brazil), Ukrainian, Simplified Chinese, Traditional Chinese, across the tray, popup, and dashboard. Language is auto-detected from your system locale.
 - **Codex and Kimi support** - tracks OpenAI Codex and Kimi For Coding usage alongside Claude whenever their CLI login state is present, each with its own tab, thresholds, and history.
-- **Customizable** - adjust polling intervals, alert thresholds, popup colors, which quota fields appear in the icon and tooltip, and more via a JSON settings file or the dashboard settings panel.
+- **Customizable** - adjust polling intervals, alert thresholds, popup colors, which quota fields appear in the icon, tooltip, and Claude Code status line, and more via a JSON settings file or the dashboard settings panel.
 
 ## Requirements
 
@@ -113,6 +114,6 @@ python -m unittest discover -s tests
 
 - Network traffic is limited to `api.anthropic.com` (Claude usage), `chatgpt.com` (Codex usage), and `api.kimi.com` (Kimi usage) - the latter two only when a token is present. No telemetry, no analytics.
 - Credentials are read from the Claude Code, Codex, and Kimi Code CLI login state on your machine and used only in HTTP Authorization headers. They are never logged, stored elsewhere, or transmitted to any other destination.
-- The dashboard runs on `localhost` only and is not exposed on the network. It rejects requests from other websites and forged hostnames, sends strict security headers (Content-Security-Policy, X-Frame-Options, Referrer-Policy), requires a per-run session token to read settings or change anything, and never reveals filesystem paths.
+- The dashboard runs on `localhost` only and is not exposed on the network. It rejects requests from other websites and forged hostnames, sends strict security headers (Content-Security-Policy, X-Frame-Options, Referrer-Policy), requires a per-run session token to read settings or change anything, and never reveals filesystem paths. The optional Claude Code status line endpoint is read-only and answers only while you have it turned on.
 - The app never writes files (it is read-only). Settings are only written when you explicitly save from the dashboard or create the settings file manually.
 - All URLs and API endpoints are defined as top-level constants in the source - no dynamic URL construction.

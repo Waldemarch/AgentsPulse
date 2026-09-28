@@ -1236,6 +1236,8 @@ async function loadSettings() {
     // One command per line: each runs on its own, exactly like the array in the settings file.
     byId('resetCommand').value = (settings.on_reset_command || []).join('\n');
     byId('thresholdCommand').value = (settings.on_threshold_command || []).join('\n');
+    byId('statuslineEnabled').checked = !!settings.statusline_enabled;
+    loadStatuslinePreview();
 }
 
 function parseList(value) {
@@ -1272,6 +1274,7 @@ async function saveSettings(event) {
         quiet_hours_end: byId('quietHoursEnd').value || '08:00',
         on_reset_command: parseLines(byId('resetCommand').value),
         on_threshold_command: parseLines(byId('thresholdCommand').value),
+        statusline_enabled: byId('statuslineEnabled').checked,
     };
     if (style) payload.icon_style = style.value;
     const result = await postJson('/api/settings', payload);
@@ -1284,6 +1287,44 @@ async function saveSettings(event) {
     if (result.ok) {
         state.historyKey = '';
         refresh();
+        loadStatuslinePreview();
+    }
+}
+
+// The command points at this dashboard's own address, so it stays right when
+// the default port was taken and the server started on the next free one.
+// curl.exe, not curl: in Windows PowerShell "curl" is Invoke-WebRequest.
+function statuslineSnippet() {
+    const command = `curl.exe -sf --max-time 1 ${location.origin}/api/statusline`;
+    return `"statusLine": ${JSON.stringify({ type: 'command', command }, null, 2)}`;
+}
+
+// Shows the line exactly as Claude Code will, or nothing while the feature is off.
+async function loadStatuslinePreview() {
+    const preview = byId('statuslinePreview');
+    let text = '';
+    try {
+        const response = await fetch('/api/statusline?color=0', { cache: 'no-store' });
+        if (response.ok) text = (await response.text()).trim();
+    } catch {
+        text = '';
+    }
+    preview.textContent = text;
+    preview.hidden = !text;
+}
+
+async function copyStatusline() {
+    const snippet = byId('statuslineSnippet');
+    try {
+        await navigator.clipboard.writeText(snippet.textContent);
+        byId('settingsStatus').textContent = tr('copied', 'copied to the clipboard');
+    } catch {
+        // Without clipboard access the text is selected, ready for Ctrl+C.
+        const range = document.createRange();
+        range.selectNodeContents(snippet);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
     }
 }
 
@@ -1319,6 +1360,8 @@ byId('drawerBackdrop').addEventListener('click', closeDrawer);
 byId('settingsForm').addEventListener('submit', saveSettings);
 byId('testReset').addEventListener('click', () => testEvent('reset'));
 byId('testThreshold').addEventListener('click', () => testEvent('threshold'));
+byId('copyStatusline').addEventListener('click', copyStatusline);
+byId('statuslineSnippet').textContent = statuslineSnippet();
 byId('historyTable').addEventListener('toggle', () => {
     if (byId('historyTable').open && state.history) safely(renderHistoryTable, 'historyTableBody');
 });
