@@ -315,10 +315,50 @@ function statusText(outlook) {
     return tr('status_ok', 'On track');
 }
 
+// A session's limit falls between the fast pace's limit time and the slow
+// pace's, or the reset when the slow pace lasts that long.  Both ends round
+// to the nearest minute like the reset times, so an end at the reset matches them.
+function limitBand(outlook) {
+    if (!outlook.limit_earliest) return null;
+    const nearestMinute = (ts) => clock(Math.round(ts / 60) * 60);
+    const earliest = nearestMinute(outlook.limit_earliest);
+    const latest = nearestMinute(outlook.limit_latest || outlook.reset_at);
+    return earliest === latest ? null : { earliest, latest };
+}
+
+function hasBand(outlook) {
+    return outlook.forecast_low_pct !== null && outlook.forecast_low_pct !== undefined
+        && outlook.forecast_high_pct !== null && outlook.forecast_high_pct !== undefined;
+}
+
+// Whether the projection at the reset has a band wider than a point.
+function resetBand(outlook) {
+    return hasBand(outlook) && Math.round(outlook.forecast_low_pct) !== Math.round(outlook.forecast_high_pct);
+}
+
+// Whether the card names a band: the limit's, or the forecast's at the reset.
+function bandShown(outlook) {
+    if (outlook.status === 'limit') return !!(outlook.limit_at && limitBand(outlook));
+    return (outlook.status === 'ok' || outlook.status === 'tight') && resetBand(outlook);
+}
+
+// The projection at the reset, with its band when that spans more than a point.
+function forecastText(outlook) {
+    const forecast = Math.round(outlook.forecast_pct);
+    if (!resetBand(outlook)) return fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: forecast });
+    return fmt(tr('forecast_at_reset_band', '~{pct}% at reset ({low}-{high}%)'), {
+        pct: forecast, low: Math.round(outlook.forecast_low_pct), high: Math.round(outlook.forecast_high_pct),
+    });
+}
+
 function methodNote(outlook) {
     if (outlook.method === 'history') return fmt(tr('forecast_from_history', 'Projected from your last {n} cycles'), { n: outlook.cycles });
     if (outlook.method === 'average') return tr('forecast_from_average', 'Projected from the average pace so far');
-    if (outlook.method === 'pace') return tr('forecast_from_pace', 'Projected from the current pace');
+    if (outlook.method === 'pace') {
+        const note = tr('forecast_from_pace', 'Projected from the current pace');
+        if (!bandShown(outlook)) return note;
+        return `${note}\n${tr('forecast_band', 'Range: from your calmer pace (last 30 min or the session average) to your fastest quarter-hour')}`;
+    }
     return '';
 }
 
@@ -450,9 +490,11 @@ function quotaDetail(entry, outlook) {
     const forecast = outlook.forecast_pct;
     // A projected limit is named by the chip; calm and tight windows add where they are heading.
     if (outlook.status === 'limit' && outlook.limit_at && outlook.reset_at) {
+        const band = limitBand(outlook);
+        if (band) parts.push(fmt(tr('limit_between', 'limit between {earliest} and {latest}'), band));
         parts.push(fmt(tr('gap_before_reset', '~{duration} without quota before the reset'), { duration: durationText(outlook.reset_at - outlook.limit_at) }));
     } else if ((outlook.status === 'ok' || outlook.status === 'tight') && forecast !== null && forecast !== undefined && forecast - entry.utilization >= 0.5) {
-        parts.push(fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: Math.round(forecast) }));
+        parts.push(forecastText(outlook));
     }
     // After today's day end the projection targets tomorrow's, so the time is named relative to now.
     if (outlook.day_end_pct !== null && outlook.day_end_pct !== undefined && state.status.day_end) {
@@ -479,13 +521,14 @@ function trendText(trend) {
 }
 
 // Three layers: usage, a lighter projection to the reset, and a marker for the
-// share of the window that has passed.  Multi-day windows show midnights.
+// share of the window that has passed.  Multi-day windows show midnights, and
+// a session's band shows as stripes from the slow to the fast pace.
 function meter(entry, outlook) {
     const used = Math.min(100, Math.max(0, entry.utilization));
     const forecast = outlook.forecast_pct === null || outlook.forecast_pct === undefined ? used : Math.min(100, outlook.forecast_pct);
     const elapsed = entry.outlook ? entry.outlook.elapsed_pct : null;
     const label = [fmt(tr('meter_used', '{pct} used'), { pct: pct(used) })];
-    if (forecast > used) label.push(fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: Math.round(forecast) }));
+    if (forecast > used) label.push(forecastText(outlook));
     const node = h('div', { class: `meter meter-${outlook.status}`, role: 'img', 'aria-label': label.join(', ') });
     for (const position of midnights(entry)) {
         const tick = h('span', { class: 'meter-tick' });
@@ -500,6 +543,12 @@ function meter(entry, outlook) {
         ghost.style.left = `${used}%`;
         ghost.style.width = `${forecast - used}%`;
         node.append(ghost);
+    }
+    if (outlook.status !== 'blocked' && hasBand(outlook) && outlook.forecast_high_pct - outlook.forecast_low_pct >= 1) {
+        const band = h('span', { class: 'meter-band' });
+        band.style.left = `${Math.min(100, outlook.forecast_low_pct)}%`;
+        band.style.width = `${Math.min(100, outlook.forecast_high_pct) - Math.min(100, outlook.forecast_low_pct)}%`;
+        node.append(band);
     }
     if (elapsed !== null && elapsed !== undefined) {
         const marker = h('span', { class: 'meter-now' });

@@ -8,7 +8,8 @@ Claude Code status line, for example
 
 Every provider shows the tray tooltip's quota fields.  Session windows name
 the local time of their reset; a quota that is tight or heading for its limit
-adds its forecast status, and a quota at its limit also names when it resets.
+adds its forecast status (a session's limit time with the band it most likely
+falls in), and a quota at its limit also names when it resets.
 Pure formatting: the caller passes the usage data and the quota outlooks the
 app already holds, so a status line refresh never reaches a provider's API.
 """
@@ -117,7 +118,7 @@ def _quota_parts(usage: dict[str, Any], outlooks: dict[str, Outlook], fields: Se
         elif outlook.status == 'blocked':
             text += f' {_RESET_MARK}{format_clock(outlook.reset_at, now=now)}'
         if outlook.status != 'ok':
-            text += f' {format_outlook(outlook, now=now)}'
+            text += f' {format_outlook(outlook, now=now, band=True)}'
             if color:
                 text = f"{_STATUS_COLORS.get(outlook.status, '')}{text}{_ANSI_RESET}"
         parts.append(text)

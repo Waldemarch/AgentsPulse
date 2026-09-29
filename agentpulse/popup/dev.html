@@ -82,7 +82,7 @@ const PRESETS = {
         profile: { email: 'user@example.com', plan: 'Max (Team)' },
         usage: [
             { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42,
-              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35) },
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35, true) },
             { label: 'Weekly (7 day)', pct_text: '65%', fill_pct: 0.65,
               reset_text: 'Resets on Sat, 12:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.55, ...statusFor(65, 0.55),
               budget_text: 'Today: 12 of 9 pp', budget_over: true },
@@ -103,7 +103,7 @@ const PRESETS = {
         profile: null,
         usage: [
             { label: 'Session (5hr)', pct_text: '10%', fill_pct: 0.10,
-              reset_text: 'Resets in 4h 50m (17:00)', midnights: [], marker_rel: 0.03, ...statusFor(10, 0.03) },
+              reset_text: 'Resets in 4h 50m (17:00)', midnights: [], marker_rel: 0.03, ...statusFor(10, 0.03, true) },
         ],
         extra: null,
         installations: [],
@@ -113,7 +113,7 @@ const PRESETS = {
         profile: { email: 'user@example.com', plan: 'Max' },
         usage: [
             { label: 'Session (5hr)', pct_text: '95%', fill_pct: 0.95,
-              reset_text: 'Resets in 12m (12:12)', midnights: [], marker_rel: 0.96, ...statusFor(95, 0.96) },
+              reset_text: 'Resets in 12m (12:12)', midnights: [], marker_rel: 0.96, ...statusFor(95, 0.96, true) },
             { label: 'Weekly (7 day)', pct_text: '88%', fill_pct: 0.88,
               reset_text: 'Resets tomorrow, 08:00', midnights: [0.143, 0.286, 0.429, 0.571, 0.714, 0.857], marker_rel: 0.80, ...statusFor(88, 0.80),
               budget_text: 'Today: 3 of 12 pp', budget_over: false },
@@ -126,7 +126,7 @@ const PRESETS = {
         profile: { email: 'user@example.com', plan: 'Max (Team)' },
         usage: [
             { label: 'Session (5hr)', pct_text: '42%', fill_pct: 0.42,
-              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35) },
+              reset_text: 'Resets in 2h 30m (14:30)', midnights: [], marker_rel: 0.35, ...statusFor(42, 0.35, true) },
         ],
         extra: null,
         installations: [{ name: 'CLI', version: '2.1.69' }],
@@ -180,7 +180,7 @@ function randomize() {
         const pct = Math.round(Math.random() * 100);
         entry.fill_pct = pct / 100;
         entry.pct_text = pct + '%';
-        Object.assign(entry, statusFor(pct, entry.marker_rel));
+        Object.assign(entry, statusFor(pct, entry.marker_rel, !entry.midnights.length));
     }
     if (data.extra) {
         const pct = Math.round(Math.random() * 100);
@@ -192,16 +192,26 @@ function randomize() {
     win().updateProviders(providers);
 }
 
-// Mirrors the app's three states with a plain pace projection, for previews only.
-function statusFor(pct, markerRel) {
+// Mirrors the app's three states with a plain pace projection, for previews only;
+// a session also gets a band around its forecast.
+function statusFor(pct, markerRel, session = false) {
     const elapsed = Math.max(0.05, markerRel ?? 0.5);
     const forecast = pct >= 100 ? 100 : Math.min(100, pct / elapsed);
     const status = pct >= 100 ? 'blocked' : forecast >= 100 ? 'limit' : forecast >= 90 ? 'tight' : 'ok';
+    const banded = session && status !== 'blocked';
+    const low = pct + (forecast - pct) * 0.6;
+    const high = Math.min(100, pct + (pct / elapsed - pct) * 1.8);
     const text = { ok: 'On track', tight: 'Tight', limit: 'Limit ~15:47', blocked: 'Limit reached' }[status];
+    const calm = status === 'ok' || status === 'tight';
     return {
         status, status_text: text, forecast_pct: forecast / 100,
-        forecast_text: status === 'ok' || status === 'tight' ? `~${Math.round(forecast)}%` : '',
-        forecast_title: status === 'ok' || status === 'tight' ? `~${Math.round(forecast)}% at reset` : '',
+        forecast_text: calm ? `~${Math.round(forecast)}%` : '',
+        forecast_title: calm ? (banded ? `~${Math.round(forecast)}% at reset (${Math.round(low)}-${Math.round(high)}%)` : `~${Math.round(forecast)}% at reset`) : '',
+        band_low: banded ? low / 100 : null,
+        band_high: banded ? high / 100 : null,
+        limit_text: status !== 'limit' ? '' : banded
+            ? 'Limit between 15:20 and 16:30 \u00b7 ~1h 10m without quota before the reset'
+            : '~1h 10m without quota before the reset',
     };
 }
 
@@ -212,7 +222,7 @@ function resolveSecondaryPreset(name, sessionPct, weeklyPct, cliVersion) {
     data.installations = [{ name: 'CLI', version: cliVersion }];
     data.usage = data.usage.slice(0, 2).map((entry, index) => {
         const pct = index === 0 ? sessionPct : weeklyPct;
-        return { ...entry, pct_text: pct + '%', fill_pct: pct / 100, ...statusFor(pct, entry.marker_rel) };
+        return { ...entry, pct_text: pct + '%', fill_pct: pct / 100, ...statusFor(pct, entry.marker_rel, index === 0) };
     });
     return data;
 }

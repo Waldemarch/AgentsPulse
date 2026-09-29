@@ -604,8 +604,8 @@ def _dashboard_i18n() -> dict[str, str]:
         'table_hour', 'table_day', 'table_note_hour', 'table_note_day',
         'consumption_daily', 'consumption_hourly', 'consumption_meta', 'consumption_meta_mixed', 'pp',
         'heatmap', 'heatmap_cell', 'heatmap_peak', 'heatmap_less', 'heatmap_more',
-        'meter_used', 'gap_before_reset', 'by_time', 'vs_usual_pace',
-        'forecast_from_pace', 'forecast_from_history', 'forecast_from_average',
+        'meter_used', 'by_time', 'vs_usual_pace',
+        'forecast_from_pace', 'forecast_from_history', 'forecast_from_average', 'forecast_band', 'limit_between',
         'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
         'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
         'group_statusline', 'statusline_enabled', 'statusline_hint', 'copy', 'copied',
@@ -622,7 +622,7 @@ def _dashboard_i18n() -> dict[str, str]:
     strings = {key: T[f'dash_{key}'] for key in keys}
     shared = [
         'autostart', 'status_ok', 'status_tight', 'status_limit', 'status_limit_at', 'status_blocked', 'status_refreshing',
-        'forecast_at_reset', 'clock_tomorrow', 'clock_weekday', 'duration_m', 'duration_hm', 'duration_dh',
+        'forecast_at_reset', 'forecast_at_reset_band', 'gap_before_reset', 'clock_tomorrow', 'clock_weekday', 'duration_m', 'duration_hm', 'duration_dh',
     ]
     for key in shared:
         strings[key] = T[key]

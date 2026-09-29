@@ -189,10 +189,17 @@ The dashboard opens with a one-line summary and a card per provider. Every quota
 
 Forecasts are calculated locally from the usage history:
 
-- **Session windows** (measured in hours) are projected from their pace: 60% the change over the last half hour, 40% the window's average (counted over at least its first ten minutes).
+- **Session windows** (measured in hours) are projected from their pace: 60% the change over the last half hour, 40% the window's average (counted over at least its first ten minutes). Each session forecast also has a band: the same projection at a slow pace (the lower of the last half hour and the window's average) and at a fast one (the quickest quarter-hour of the window, and at least the higher of the two).
 - **Multi-day windows** (weekly limits) follow your own rhythm: the median usage that past cycles added after the same point of their window, once history holds such cycles. Before that, the average pace over at least one full day is used, so a single working session is not extrapolated across nights and weekends.
 
 The status follows the forecast at the reset: **On track** below 90%, **Tight** from 90%, **Limit before reset** (or **Limit ~15:47** when a pace gives the time) at 100%, and **Limit reached** once a quota is used up. The popup, the tray tooltip, and the dashboard show the same status.
+
+A session heading for its limit also names the band its limit most likely falls in - from the fast pace's limit time to the slow pace's, or to the reset when the slow pace lasts that long - and how long you would be without quota before the reset:
+
+- the tray tooltip and the Claude Code status line show **Limit ~15:47 (15:20-16:30)**; the tooltip leaves the band out when it would not fit;
+- the popup and the dashboard keep **Limit ~15:47** on the status chip and add **Limit between 15:20 and 16:30 · ~1h 10m without quota before the reset** below the bar.
+
+A calm or tight session shows the band of its forecast at the reset instead, for example **~62% at reset (48-85%)** in the dashboard and in the popup's hover text. Every session bar marks its band with stripes.
 
 Prediction and heatmap settings:
 

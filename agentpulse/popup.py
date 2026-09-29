@@ -20,8 +20,8 @@ import webview  # type: ignore[import-untyped]
 from . import __version__
 from .claude_cli import CHANGELOG_URL, find_installations
 from .formatting import (
-    elapsed_pct, expand_popup_fields, field_period, format_credits,
-    format_outlook, midnight_positions, popup_label, time_until,
+    elapsed_pct, expand_popup_fields, field_period, format_credits, format_duration,
+    format_outlook, limit_band, midnight_positions, popup_label, time_until,
 )
 from .i18n import T
 from .provider_cache import UsageSnapshot
@@ -80,10 +80,11 @@ def _bar_view(
     outlook: Outlook | None = None,
     budget: DailyBudget | None = None,
 ) -> dict[str, Any]:
-    """Build one usage bar: fill, forecast to the reset, status, reset text, time markers and today's budget.
+    """Build one usage bar: fill, forecast to the reset and its band, status, reset text, time markers and today's budget.
 
     Without an outlook (no reset time or unknown window) the bar only tells a
-    reached limit from a usable one.  Only a weekly quota has a daily budget.
+    reached limit from a usable one.  Only a weekly quota has a daily budget,
+    and only a session's forecast has a band.
     """
     pct = entry.get('utilization', 0) or 0
     resets_at = entry.get('resets_at', '') or ''
@@ -97,6 +98,7 @@ def _bar_view(
         status_text = T['status_blocked'] if pct >= 100 else ''
         forecast = None
     shown = forecast is not None and status in {'ok', 'tight'}
+    has_band = outlook is not None and outlook.forecast_low_pct is not None and outlook.forecast_high_pct is not None
     return {
         'label': label,
         'pct_text': f'{pct:.0f}%',
@@ -106,13 +108,36 @@ def _bar_view(
         'forecast_pct': None if forecast is None else max(0.0, min(1.0, forecast / 100)),
         # A projected limit already names its time, so only calm and tight bars add the forecast.
         'forecast_text': T['forecast_short'].format(pct=f'{forecast:.0f}') if shown else '',
-        'forecast_title': T['forecast_at_reset'].format(pct=f'{forecast:.0f}') if shown else '',
+        'forecast_title': _forecast_title(forecast, outlook) if shown else '',
+        'band_low': max(0.0, min(1.0, outlook.forecast_low_pct / 100)) if has_band else None,
+        'band_high': max(0.0, min(1.0, outlook.forecast_high_pct / 100)) if has_band else None,
+        'limit_text': _limit_text(outlook),
         'reset_text': time_until(resets_at) if resets_at else '',
         'midnights': midnight_positions(resets_at, period) if period else [],
         'marker_rel': max(0.0, min(1.0, time_pct / 100)) if time_pct is not None else None,
         'budget_text': _budget_text(budget),
         'budget_over': budget is not None and round(budget.used) > round(budget.allowance),
     }
+
+
+def _forecast_title(forecast: float, outlook: Outlook) -> str:
+    """Hover text of a calm or tight bar: the forecast at the reset, with its band when that spans more than a point."""
+    low, high = outlook.forecast_low_pct, outlook.forecast_high_pct
+    if low is None or high is None or round(low) == round(high):
+        return T['forecast_at_reset'].format(pct=f'{forecast:.0f}')
+    return T['forecast_at_reset_band'].format(pct=f'{forecast:.0f}', low=f'{low:.0f}', high=f'{high:.0f}')
+
+
+def _limit_text(outlook: Outlook | None) -> str:
+    """The line under a bar projected to run out: the band its limit falls in, and how long it lasts before the reset; '' otherwise."""
+    if outlook is None or outlook.status != 'limit' or outlook.limit_at is None:
+        return ''
+    parts = []
+    clocks = limit_band(outlook)
+    if clocks is not None:
+        parts.append(T['limit_between'].format(earliest=clocks[0], latest=clocks[1]))
+    parts.append(T['gap_before_reset'].format(duration=format_duration(outlook.reset_at - outlook.limit_at)))
+    return ' \u00b7 '.join(parts)
 
 
 def _budget_text(budget: DailyBudget | None) -> str:
