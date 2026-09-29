@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 from agentpulse.budget import DailyBudget
 from agentpulse.cache import CacheSnapshot
 from agentpulse.forecast import Outlook
-from agentpulse.formatting import popup_label
+from agentpulse.formatting import format_duration, format_outlook, popup_label
 from agentpulse.i18n import T
 from agentpulse.popup import (
     UsagePopup, _BASELINE_DPI, _PopupApi, _init_config, _provider_entries,
@@ -684,6 +684,68 @@ class TestDailyBudgetView(unittest.TestCase):
 
         bars = self._bars(config['providers'][0]['data'])
         self.assertEqual(bars[popup_label('seven_day')]['budget_text'], T['budget_today'].format(used='2', allowance='10'))
+
+
+class TestForecastBandView(unittest.TestCase):
+    """Tests for a session's forecast band on its bar."""
+
+    RESET = datetime(2026, 1, 14, 17, 0).timestamp()
+
+    def _bar(self, outlook: Outlook) -> dict:
+        usage = {'five_hour': {'utilization': 40.0, 'resets_at': '2099-01-01T00:00:00+00:00'}}
+        return _snapshot_to_dict(_snap(usage=usage), installations=[], outlooks={'five_hour': outlook})['usage'][0]
+
+    def _outlook(self, status: str, forecast: float, low: float | None, high: float | None, **times: float | None) -> Outlook:
+        return Outlook(
+            status, forecast, times.get('limit_at'), self.RESET, 50.0, 'pace',
+            forecast_low_pct=low, forecast_high_pct=high, limit_earliest=times.get('earliest'), limit_latest=times.get('latest'),
+        )
+
+    def test_calm_bar_names_the_band_of_its_forecast(self):
+        bar = self._bar(self._outlook('ok', 62.4, 48.2, 85.0))
+
+        self.assertEqual(bar['forecast_title'], T['forecast_at_reset_band'].format(pct='62', low='48', high='85'))
+        self.assertAlmostEqual(bar['band_low'], 0.482)
+        self.assertAlmostEqual(bar['band_high'], 0.85)
+        self.assertEqual(bar['limit_text'], '')
+
+    def test_band_within_one_point_names_only_the_forecast(self):
+        bar = self._bar(self._outlook('tight', 91.0, 90.8, 91.2))
+
+        self.assertEqual(bar['forecast_title'], T['forecast_at_reset'].format(pct='91'))
+
+    def test_limit_bar_names_its_band_and_the_time_without_quota_under_the_bar(self):
+        """The chip keeps the short limit time, so the reset text next to it still fits."""
+        limit_at = self.RESET - 70 * 60
+        outlook = self._outlook('limit', 100.0, 90.0, 100.0, limit_at=limit_at, earliest=limit_at - 25 * 60, latest=limit_at + 30 * 60)
+
+        bar = self._bar(outlook)
+
+        earliest = datetime.fromtimestamp(limit_at - 25 * 60).strftime('%H:%M')
+        latest = datetime.fromtimestamp(limit_at + 30 * 60).strftime('%H:%M')
+        self.assertEqual(bar['status_text'], format_outlook(outlook))
+        self.assertTrue(bar['status_text'].endswith(datetime.fromtimestamp(limit_at).strftime('%H:%M')))
+        band = T['limit_between'].format(earliest=earliest, latest=latest)
+        self.assertEqual(bar['limit_text'], f"{band} \u00b7 {T['gap_before_reset'].format(duration=format_duration(70 * 60))}")
+        self.assertEqual((bar['band_low'], bar['band_high']), (0.9, 1.0))
+        self.assertEqual(bar['forecast_title'], '')
+
+    def test_weekly_limit_without_a_band_names_only_the_time_without_quota(self):
+        limit_at = self.RESET - 2 * 3600
+        outlook = Outlook('limit', 100.0, limit_at, self.RESET, 50.0, 'average')
+
+        bar = self._bar(outlook)
+
+        self.assertEqual((bar['band_low'], bar['band_high']), (None, None))
+        self.assertEqual(bar['limit_text'], T['gap_before_reset'].format(duration=format_duration(2 * 3600)))
+
+    def test_limit_without_a_time_has_no_limit_line(self):
+        self.assertEqual(self._bar(Outlook('limit', 100.0, None, self.RESET, 50.0, 'history', 3))['limit_text'], '')
+
+    def test_blocked_bar_has_neither_band_nor_limit_line(self):
+        bar = self._bar(Outlook('blocked', 100.0, None, self.RESET, 50.0, 'reached'))
+
+        self.assertEqual((bar['band_low'], bar['band_high'], bar['limit_text']), (None, None, ''))
 
 
 class TestProviderEntries(unittest.TestCase):

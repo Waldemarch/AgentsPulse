@@ -375,7 +375,9 @@ function makeBar(entry) {
   fill.style.width = '0%';
   const forecast = document.createElement('div');
   forecast.className = 'bar-forecast';
-  track.append(fill, forecast);
+  const band = document.createElement('div');
+  band.className = 'bar-band';
+  track.append(fill, forecast, band);
   const footer = document.createElement('div');
   footer.className = 'bar-footer';
   const chip = document.createElement('span');
@@ -383,9 +385,11 @@ function makeBar(entry) {
   const detail = document.createElement('span');
   detail.className = 'reset-text';
   footer.append(chip, detail);
+  const limit = document.createElement('div');
+  limit.className = 'limit-text';
   const budget = document.createElement('div');
   budget.className = 'budget-text';
-  wrapper.append(header, track, footer, budget);
+  wrapper.append(header, track, footer, limit, budget);
   updateBar(wrapper, entry, true);
   return wrapper;
 }
@@ -409,6 +413,14 @@ function updateBar(wrapper, entry, fresh = false) {
   forecast.classList.toggle('hidden', ahead < 0.005);
   forecast.style.left = `${entry.fill_pct * 100}%`;
   forecast.style.width = `${ahead * 100}%`;
+  // A session's band: where the reset lands at a slow and at a fast pace.
+  const band = wrapper.querySelector('.bar-band');
+  const hasBand = entry.band_low !== null && entry.band_low !== undefined && entry.band_high - entry.band_low >= 0.01;
+  band.classList.toggle('hidden', !hasBand);
+  if (hasBand) {
+    band.style.left = `${entry.band_low * 100}%`;
+    band.style.width = `${(entry.band_high - entry.band_low) * 100}%`;
+  }
   const track = wrapper.querySelector('.bar-container');
   track.querySelectorAll('.bar-divider,.bar-marker').forEach((node) => node.remove());
   addMarkers(track, entry);
@@ -423,6 +435,10 @@ function updateBar(wrapper, entry, fresh = false) {
   budget.textContent = entry.budget_text || '';
   budget.classList.toggle('hidden', !entry.budget_text);
   budget.classList.toggle('over', !!entry.budget_over);
+  // When a projected limit most likely comes, and how long it lasts before the reset.
+  const limit = wrapper.querySelector('.limit-text');
+  limit.textContent = entry.limit_text || '';
+  limit.classList.toggle('hidden', !entry.limit_text);
 }
 
 function addMarkers(track, entry) {

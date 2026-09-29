@@ -574,6 +574,23 @@ class TestStatusOutlooks(unittest.TestCase):
 
         self.assertEqual(self._payload(self._app(usage, history))['providers'][0]['usage'][0]['outlook']['status'], 'ok')
 
+    def test_a_session_outlook_carries_its_band(self):
+        usage = {
+            'five_hour': {'utilization': 60.0, 'resets_at': self._iso(2.5)},
+            'seven_day': {'utilization': 30.0, 'resets_at': self._iso(80)},
+        }
+        history = DashboardHistory()
+        history.record('claude', {'five_hour': {'utilization': 50.0, 'resets_at': usage['five_hour']['resets_at']}}, ts=time.time() - 20 * 60)
+
+        session, weekly = [entry['outlook'] for entry in self._payload(self._app(usage, history))['providers'][0]['usage']]
+
+        self.assertEqual(session['status'], 'limit')
+        self.assertLess(session['limit_earliest'], session['limit_at'])
+        self.assertLess(session['limit_at'], session['limit_latest'])
+        self.assertLessEqual(session['forecast_low_pct'], session['forecast_pct'])
+        self.assertEqual(session['forecast_high_pct'], 100.0)
+        self.assertEqual([weekly[key] for key in ('forecast_low_pct', 'forecast_high_pct', 'limit_earliest', 'limit_latest')], [None] * 4)
+
     def test_day_end_projection_before_a_later_reset(self):
         app = self._app({'seven_day': {'utilization': 30.0, 'resets_at': self._iso(80)}})
         end = datetime.fromtimestamp(time.time() + 3600).strftime('%H:%M')
@@ -1125,6 +1142,20 @@ class TestDashboardI18n(unittest.TestCase):
 
         self.assertIn('{count}', strings['rows'])
         self.assertIn('{range}', strings['rows'])
+        for token in ('{earliest}', '{latest}'):
+            self.assertIn(token, strings['limit_between'])
+        for token in ('{pct}', '{low}', '{high}'):
+            self.assertIn(token, strings['forecast_at_reset_band'])
+
+    def test_band_texts_are_shared_with_the_popup(self):
+        from agentpulse.i18n import T
+
+        strings = _dashboard_i18n()
+
+        for key in ('forecast_at_reset_band', 'gap_before_reset'):
+            self.assertEqual(strings[key], T[key])
+        self.assertEqual(strings['forecast_band'], T['dash_forecast_band'])
+        self.assertEqual(strings['limit_between'], T['dash_limit_between'])
 
     def test_save_messages_do_not_show_the_settings_path(self):
         strings = _dashboard_i18n()

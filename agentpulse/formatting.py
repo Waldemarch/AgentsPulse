@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 __all__ = [
     'PERIOD_5H', 'PERIOD_7D',
     'countdown_label', 'elapsed_pct', 'expand_popup_fields', 'field_period', 'field_sort_key',
-    'format_clock', 'format_credits', 'format_duration', 'format_outlook', 'format_tooltip',
+    'format_clock', 'format_credits', 'format_duration', 'format_outlook', 'format_tooltip', 'limit_band',
     'midnight_positions', 'parse_field_name', 'period_to_field_name', 'popup_label',
     'time_until', 'tooltip_label',
 ]
@@ -169,7 +169,7 @@ def elapsed_pct(resets_at: str, period_seconds: int) -> float | None:
     return max(0.0, min(100.0, elapsed / period_seconds * 100.0))
 
 
-def format_outlook(outlook: Outlook, *, now: float | None = None) -> str:
+def format_outlook(outlook: Outlook, *, now: float | None = None, band: bool = False) -> str:
     """Return the short status text of a quota outlook, e.g. ``'Tight'`` or ``'Limit ~15:47'``.
 
     Parameters
@@ -179,16 +179,46 @@ def format_outlook(outlook: Outlook, *, now: float | None = None) -> str:
     now
         Current time as a Unix timestamp, for the day of a limit time;
         defaults to the current time.
+    band
+        Add a session's limit band (see :func:`limit_band`) to its limit
+        time, e.g. ``'Limit ~15:47 (15:20-16:30)'``.
     """
     if outlook.status == 'blocked':
         return T['status_blocked']
     if outlook.status == 'limit':
         if outlook.limit_at is None:
             return T['status_limit']
-        return T['status_limit_at'].format(clock=format_clock(outlook.limit_at, now=now))
+        clock = format_clock(outlook.limit_at, now=now)
+        clocks = limit_band(outlook) if band else None
+        if clocks is None:
+            return T['status_limit_at'].format(clock=clock)
+        return T['status_limit_band'].format(clock=clock, earliest=clocks[0], latest=clocks[1])
     if outlook.status == 'tight':
         return T['status_tight']
     return T['status_ok']
+
+
+def limit_band(outlook: Outlook) -> tuple[str, str] | None:
+    """Return the local ``HH:MM`` between which a session's limit is most likely reached.
+
+    The band runs from the fast pace's limit time to the slow pace's, or to
+    the reset when the slow pace lasts that long.  Both ends are rounded to
+    the nearest minute, like reset times, so a band that ends at the reset
+    names the same time as the reset.  None without a band, or when both
+    ends fall in the same minute.
+    """
+    if outlook.limit_earliest is None:
+        return None
+    latest = outlook.limit_latest if outlook.limit_latest is not None else outlook.reset_at
+    earliest_text = _nearest_minute(outlook.limit_earliest)
+    latest_text = _nearest_minute(latest)
+    if earliest_text == latest_text:
+        return None
+    return earliest_text, latest_text
+
+
+def _nearest_minute(ts: float) -> str:
+    return datetime.fromtimestamp(round(ts / 60) * 60).strftime('%H:%M')
 
 
 def countdown_label(seconds: float) -> str:
@@ -290,7 +320,7 @@ def format_credits(cents: float) -> str:
     return rendered
 
 
-def _format_provider_lines(data: dict[str, Any], outlooks: dict[str, Outlook]) -> list[str]:
+def _format_provider_lines(data: dict[str, Any], outlooks: dict[str, Outlook], *, band: bool) -> list[str]:
     lines: list[str] = []
     for key in _settings.TOOLTIP_FIELDS:
         item = data.get(key)
@@ -303,7 +333,7 @@ def _format_provider_lines(data: dict[str, Any], outlooks: dict[str, Outlook]) -
             line += f' ({reset})'
         outlook = outlooks.get(key)
         if outlook is not None:
-            line += f' - {format_outlook(outlook)}'
+            line += f' - {format_outlook(outlook, band=band)}'
         lines.append(line)
     return lines
 
@@ -354,8 +384,9 @@ def format_tooltip(
 
     When the verbose per-field lines (reset time, status) for every active
     provider fit within the limit, they are shown in full - this is the
-    common case with the default one or two tooltip fields.  When they
-    don't (more providers, more configured fields), every provider is
+    common case with the default one or two tooltip fields.  A session's
+    limit band is the first thing left out when they don't fit.  When they
+    still don't (more providers, more configured fields), every provider is
     compacted onto a single summary line instead of the providers listed
     last being silently dropped.
     """
@@ -375,18 +406,25 @@ def format_tooltip(
         sections.append((None, data))
     sections.extend(healthy)
 
-    verbose_lines = [T['tooltip_title']]
-    for name, entry in sections:
-        if name:
-            verbose_lines.append(_secondary_heading(name))
-        verbose_lines.extend(_format_provider_lines(entry, provider_outlooks.get(name or 'claude', {})))
-    text = '\n'.join(verbose_lines)
+    text = _verbose_tooltip(sections, provider_outlooks, band=True)
+    if len(text) > 128:
+        text = _verbose_tooltip(sections, provider_outlooks, band=False)
     if len(text) <= 128 or len(sections) <= 1:
         return _trim_to_line_boundary(text)
 
     compact_lines = [T['tooltip_title']]
     compact_lines.extend(_format_compact_line(name or 'claude', entry) for name, entry in sections)
     return _trim_to_line_boundary('\n'.join(compact_lines))
+
+
+def _verbose_tooltip(sections: list[tuple[str | None, dict[str, Any]]], outlooks: dict[str, dict[str, Outlook]], *, band: bool) -> str:
+    """Every provider's per-field lines under the tooltip title, secondary providers under their own heading."""
+    lines = [T['tooltip_title']]
+    for name, entry in sections:
+        if name:
+            lines.append(_secondary_heading(name))
+        lines.extend(_format_provider_lines(entry, outlooks.get(name or 'claude', {}), band=band))
+    return '\n'.join(lines)
 
 
 def _trim_to_line_boundary(text: str) -> str:

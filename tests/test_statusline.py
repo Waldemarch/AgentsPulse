@@ -1,6 +1,7 @@
 """Tests for the Claude Code status line text (agentpulse/statusline.py)."""
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from datetime import datetime
 
@@ -70,6 +71,17 @@ class TestFormatStatusline(unittest.TestCase):
 
         status = T['status_limit_at'].format(clock=format_clock(limit_at, now=NOW))
         self.assertEqual(text, f'Claude {RED}5h 72% ↺{_clock(self.session_reset)} {status}{RESET}')
+
+    def test_projected_session_limit_names_its_band(self):
+        limit_at = NOW + HOUR
+        outlook = dataclasses.replace(
+            _outlook('limit', self.session_reset, limit_at=limit_at), limit_earliest=NOW + 40 * 60, limit_latest=NOW + 90 * 60,
+        )
+
+        text = format_statusline([('claude', _usage(five_hour=72.0))], {'claude': {'five_hour': outlook}}, fields=FIELDS, now=NOW, color=False)
+
+        status = T['status_limit_band'].format(clock=format_clock(limit_at, now=NOW), earliest=_clock(NOW + 40 * 60), latest=_clock(NOW + 90 * 60))
+        self.assertEqual(text, f'Claude 5h 72% ↺{_clock(self.session_reset)} {status}')
 
     def test_weekly_limit_without_a_time_names_the_limit(self):
         outlooks = {'claude': {'seven_day': _outlook('limit', self.week_reset)}}

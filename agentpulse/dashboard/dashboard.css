@@ -412,7 +412,7 @@ main {
     background: var(--meter-track);
 }
 
-.meter-used, .meter-ghost, .meter-tick, .meter-now {
+.meter-used, .meter-ghost, .meter-band, .meter-tick, .meter-now {
     position: absolute;
     top: 0;
     bottom: 0;
@@ -429,6 +429,17 @@ main {
     border-radius: 0 4px 4px 0;
     background: color-mix(in srgb, var(--meter-ok) 30%, transparent);
 }
+
+/* A session's band: stripes from the slow to the fast pace's reading at the reset. */
+.meter-band {
+    --band-color: var(--meter-ok);
+    border-radius: 0 4px 4px 0;
+    background: repeating-linear-gradient(135deg, var(--band-color) 0 1.5px, transparent 1.5px 4px);
+    opacity: 0.6;
+}
+
+.meter-tight .meter-band { --band-color: var(--warning); }
+.meter-limit .meter-band { --band-color: var(--critical); }
 
 .meter-tight .meter-used { background: var(--warning); }
 .meter-tight .meter-ghost { background: color-mix(in srgb, var(--warning) 34%, transparent); }

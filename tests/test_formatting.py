@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from agentpulse.formatting import (
     PERIOD_5H, PERIOD_7D,
-    countdown_label, elapsed_pct, expand_popup_fields, field_period, format_credits, format_duration, format_outlook, format_tooltip,
+    countdown_label, elapsed_pct, expand_popup_fields, field_period, format_credits, format_duration, format_outlook, format_tooltip, limit_band,
     period_to_field_name,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
@@ -425,6 +425,16 @@ def _outlook(status: str, limit_at: float | None = None) -> Outlook:
     return Outlook(status, 50.0, limit_at, 0.0, 50.0, 'pace')
 
 
+def _banded(limit_at: datetime, *, earliest: datetime, latest: datetime | None = None, reset_at: datetime | None = None) -> Outlook:
+    """A session outlook heading for its limit, with the band of its limit time."""
+    reset = reset_at or limit_at.replace(hour=17, minute=0, second=0)
+    return Outlook(
+        'limit', 100.0, limit_at.timestamp(), reset.timestamp(), 50.0, 'pace',
+        forecast_low_pct=90.0, forecast_high_pct=100.0,
+        limit_earliest=earliest.timestamp(), limit_latest=latest.timestamp() if latest is not None else None,
+    )
+
+
 @patch('agentpulse.formatting.T', EN)
 class TestFormatOutlook(unittest.TestCase):
     """Tests for format_outlook() - the status text next to a quota."""
@@ -450,6 +460,53 @@ class TestFormatOutlook(unittest.TestCase):
 
         self.assertEqual(format_outlook(_outlook('limit', tomorrow), now=self.NOW), 'Limit ~tomorrow 08:05')
         self.assertEqual(format_outlook(_outlook('limit', saturday), now=self.NOW), 'Limit ~Sat 10:00')
+
+    def test_a_session_limit_names_the_band_it_falls_in(self):
+        outlook = _banded(datetime(2026, 1, 14, 15, 47), earliest=datetime(2026, 1, 14, 15, 20), latest=datetime(2026, 1, 14, 16, 30))
+
+        self.assertEqual(format_outlook(outlook, now=self.NOW, band=True), 'Limit ~15:47 (15:20-16:30)')
+
+    def test_a_slow_pace_that_lasts_ends_the_band_at_the_reset(self):
+        outlook = _banded(datetime(2026, 1, 14, 15, 47), earliest=datetime(2026, 1, 14, 15, 20), reset_at=datetime(2026, 1, 14, 17, 5))
+
+        self.assertEqual(format_outlook(outlook, now=self.NOW, band=True), 'Limit ~15:47 (15:20-17:05)')
+
+    def test_a_band_within_one_minute_is_left_out(self):
+        outlook = _banded(datetime(2026, 1, 14, 15, 47, 10), earliest=datetime(2026, 1, 14, 15, 47, 5), latest=datetime(2026, 1, 14, 15, 47, 25))
+
+        self.assertIsNone(limit_band(outlook))
+        self.assertEqual(format_outlook(outlook, now=self.NOW, band=True), 'Limit ~15:47')
+
+    def test_band_ends_name_only_their_time(self):
+        """The limit time names the day; the band around it stays within the session."""
+        late = datetime(2026, 1, 14, 22, 0).timestamp()
+        outlook = _banded(
+            datetime(2026, 1, 15, 0, 25), earliest=datetime(2026, 1, 14, 23, 50), latest=datetime(2026, 1, 15, 1, 10),
+            reset_at=datetime(2026, 1, 15, 2, 0),
+        )
+
+        self.assertEqual(format_outlook(outlook, now=late, band=True), 'Limit ~tomorrow 00:25 (23:50-01:10)')
+
+    def test_the_band_is_left_out_unless_asked_for(self):
+        outlook = _banded(datetime(2026, 1, 14, 15, 47), earliest=datetime(2026, 1, 14, 15, 20), latest=datetime(2026, 1, 14, 16, 30))
+
+        self.assertEqual(format_outlook(outlook, now=self.NOW), 'Limit ~15:47')
+
+    def test_limit_band_names_both_ends(self):
+        outlook = _banded(datetime(2026, 1, 14, 15, 47), earliest=datetime(2026, 1, 14, 15, 20), latest=datetime(2026, 1, 14, 16, 30))
+
+        self.assertEqual(limit_band(outlook), ('15:20', '16:30'))
+
+    def test_band_ends_round_to_the_nearest_minute_like_reset_times(self):
+        """A reset reported a moment before 17:05 reads 17:05, as in the reset text."""
+        outlook = _banded(
+            datetime(2026, 1, 14, 15, 47), earliest=datetime(2026, 1, 14, 15, 19, 40), reset_at=datetime(2026, 1, 14, 17, 4, 59, 600000),
+        )
+
+        self.assertEqual(limit_band(outlook), ('15:20', '17:05'))
+
+    def test_no_limit_band_without_an_earliest_limit(self):
+        self.assertIsNone(limit_band(_outlook('limit', datetime(2026, 1, 14, 15, 47).timestamp())))
 
 
 @patch('agentpulse.formatting.T', EN)
@@ -788,6 +845,33 @@ class TestFormatTooltip(unittest.TestCase):
 
         self.assertEqual(lines[1], '5h: 80% (Resets in 3h 0m (15:00)) - Tight')
         self.assertEqual(lines[2], '7d: 20% (Resets in 3h 0m (15:00))')
+
+    @patch('agentpulse.formatting.time_until', return_value='Resets in 3h 0m (15:00)')
+    def test_a_session_limit_shows_its_band_when_it_fits(self, _mock_tu):
+        today = datetime.now().replace(second=0, microsecond=0)
+        outlook = _banded(today.replace(hour=15, minute=47), earliest=today.replace(hour=15, minute=20), latest=today.replace(hour=16, minute=30))
+        data = {'five_hour': {'utilization': 80.0, 'resets_at': '2025-01-15T15:00:00+00:00'}}
+
+        lines = format_tooltip(data, outlooks={'claude': {'five_hour': outlook}}).split('\n')
+
+        self.assertEqual(lines[1], '5h: 80% (Resets in 3h 0m (15:00)) - Limit ~15:47 (15:20-16:30)')
+
+    @patch('agentpulse.formatting.time_until', return_value='r' * 36)
+    def test_the_band_is_left_out_before_a_line(self, _mock_tu):
+        """With the band the tooltip would pass 128 characters; without it both lines fit."""
+        today = datetime.now().replace(second=0, microsecond=0)
+        outlook = _banded(today.replace(hour=15, minute=47), earliest=today.replace(hour=15, minute=20), latest=today.replace(hour=16, minute=30))
+        data = {
+            'five_hour': {'utilization': 80.0, 'resets_at': '2025-01-15T15:00:00+00:00'},
+            'seven_day': {'utilization': 20.0, 'resets_at': '2025-01-18T15:00:00+00:00'},
+        }
+
+        result = format_tooltip(data, outlooks={'claude': {'five_hour': outlook}})
+
+        lines = result.split('\n')
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[1].endswith(' - Limit ~15:47'))
+        self.assertLessEqual(len(result), 128)
 
     @patch('agentpulse.formatting.time_until', return_value='')
     def test_secondary_provider_uses_its_own_outlooks(self, _mock_tu):

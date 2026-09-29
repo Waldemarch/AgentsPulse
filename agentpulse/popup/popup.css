@@ -175,14 +175,16 @@ dd { margin: 0; }
 .chip.hidden,
 .bar-footer.hidden { display: none; }
 
-.budget-text {
+.budget-text,
+.limit-text {
   color: var(--fg-dim);
   font-size: 12px;
   margin-top: 3px;
 }
 
 .budget-text.over { color: var(--bar-fg-tight); }
-.budget-text.hidden { display: none; }
+.budget-text.hidden,
+.limit-text.hidden { display: none; }
 
 .bar-container {
   background: var(--bar-bg);
@@ -217,6 +219,21 @@ dd { margin: 0; }
 
 .status-tight .bar-forecast { background: var(--bar-fg-tight); }
 .status-limit .bar-forecast { background: var(--bar-fg-warn); }
+
+/* Band of a session's forecast: stripes from the slow to the fast pace's reading at the reset. */
+.bar-band {
+  --band-color: var(--bar-fg);
+  background: repeating-linear-gradient(135deg, var(--band-color) 0 1.5px, transparent 1.5px 4px);
+  height: 100%;
+  opacity: .55;
+  position: absolute;
+  top: 0;
+  transition: left .3s ease, width .3s ease;
+}
+
+.bar-band.hidden { display: none; }
+.status-tight .bar-band { --band-color: var(--bar-fg-tight); }
+.status-limit .bar-band { --band-color: var(--bar-fg-warn); }
 
 .bar-divider,
 .bar-marker {

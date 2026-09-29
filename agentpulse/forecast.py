@@ -13,10 +13,16 @@ rhythm: the median usage that past cycles added after the same point of their
 window, when history holds such cycles, otherwise the average pace over at
 least one full day, so a single working session is not extrapolated across
 nights and weekends.
+
+A session's forecast also carries a band: the same projection at a slow pace
+(the lower of the last half hour and the window's average) and at a fast one
+(the quickest quarter-hour of the window), so a limit time comes with the
+range it will most likely fall in.
 """
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import functools
 import statistics
 from collections.abc import Iterable, Sequence
@@ -47,6 +53,9 @@ _MIN_SESSION_SECONDS = 10 * 60
 _RECENT_SECONDS = 30 * 60
 _RECENT_MIN_SECONDS = 10 * 60
 _RECENT_WEIGHT = 0.6
+# The fast end of a session's band: the quickest pace between two readings at
+# least this far apart.
+_QUARTER_HOUR = 15 * 60
 # Multi-day windows without comparable history average their pace over at least a day.
 _MIN_MULTI_DAY_SECONDS = 24 * 3600
 
@@ -96,6 +105,14 @@ class Outlook:
     day_end_pct
         Projected utilization at the end of the user's day, when that comes
         before the reset.
+    forecast_low_pct, forecast_high_pct
+        Band of the projection at the reset, at most 100: at the slow pace
+        (the lower of the last half hour and the window's average) and at
+        the fast one (the quickest quarter-hour of the window).  Only a
+        ``'pace'`` projection has a band; None otherwise.
+    limit_earliest, limit_latest
+        Unix times at which the fast and the slow pace reach the limit; None
+        when that pace lasts until the reset, and without a band.
     """
 
     status: str
@@ -106,6 +123,18 @@ class Outlook:
     method: str
     cycles: int = 0
     day_end_pct: float | None = None
+    forecast_low_pct: float | None = None
+    forecast_high_pct: float | None = None
+    limit_earliest: float | None = None
+    limit_latest: float | None = None
+
+
+class _Paces(NamedTuple):
+    """Paces of a session window in utilization points per second."""
+
+    slow: float
+    likely: float
+    fast: float
 
 
 def usage_outlooks(
@@ -205,6 +234,7 @@ def quota_outlook(
 
     cycles = 0
     rate = None
+    paces = None
     growth = _typical_growth(samples, reset, period, elapsed, day_end_age, now) if multi_day else None
     if growth is not None:
         method = 'history'
@@ -217,7 +247,8 @@ def quota_outlook(
             rate = utilization / max(elapsed, _MIN_MULTI_DAY_SECONDS)
         else:
             method = 'pace'
-            rate = _session_rate(samples, utilization, reset, elapsed, now)
+            paces = _session_paces(samples, utilization, reset, period, elapsed, now)
+            rate = paces.likely
         at_reset = utilization + rate * (reset - now)
         at_day_end = None if day_end is None or day_end_age is None else utilization + rate * (day_end - now)
 
@@ -226,7 +257,16 @@ def quota_outlook(
         limit_at = now + (100.0 - utilization) / rate
     status = 'limit' if at_reset >= 100 else 'tight' if at_reset >= _TIGHT_PCT else 'ok'
     day_end_pct = None if at_day_end is None else min(100.0, at_day_end)
-    return Outlook(status, min(100.0, at_reset), limit_at, reset, elapsed_pct, method, cycles, day_end_pct)
+    outlook = Outlook(status, min(100.0, at_reset), limit_at, reset, elapsed_pct, method, cycles, day_end_pct)
+    if paces is None:
+        return outlook
+    return dataclasses.replace(
+        outlook,
+        forecast_low_pct=min(100.0, utilization + paces.slow * (reset - now)),
+        forecast_high_pct=min(100.0, utilization + paces.fast * (reset - now)),
+        limit_earliest=_limit_time(utilization, paces.fast, now, reset),
+        limit_latest=_limit_time(utilization, paces.slow, now, reset),
+    )
 
 
 def worst_outlook(outlooks: Iterable[Outlook]) -> Outlook | None:
@@ -340,20 +380,69 @@ def _same_window(sample: Sample, reset: float) -> bool:
     return sample.reset is not None and abs(sample.reset - reset) <= CYCLE_RESET_TOLERANCE
 
 
-def _session_rate(samples: Sequence[Sample], utilization: float, reset: float, elapsed: float, now: float) -> float:
-    """Utilization points per second: a blend of the recent and the average pace of the window."""
+def _session_paces(samples: Sequence[Sample], utilization: float, reset: float, period: int, elapsed: float, now: float) -> _Paces:
+    """Slow, likely and fast pace of a session window.
+
+    The likely pace blends the last half hour with the window's average and
+    the slow one is the lower of the two; without readings spanning the last
+    ten minutes both are the average.  The fast pace is the quickest
+    quarter-hour of the window, and at least the higher of the two.
+    """
     average = utilization / max(elapsed, _MIN_SESSION_SECONDS)
-    oldest_recent = None
-    for sample in samples[bisect.bisect_left(samples, now - _RECENT_SECONDS, key=lambda item: item.ts):]:
+    window = _window_readings(samples, reset, period, now)
+    fastest = _fastest_quarter_hour(window, utilization, now)
+    recent = _recent_pace(window, utilization, now)
+    if recent is None:
+        return _Paces(average, average, max(average, fastest))
+    likely = _RECENT_WEIGHT * recent + (1 - _RECENT_WEIGHT) * average
+    return _Paces(min(recent, average), likely, max(recent, average, fastest))
+
+
+def _window_readings(samples: Sequence[Sample], reset: float, period: int, now: float) -> list[Sample]:
+    """Readings of the window that resets at ``reset``, up to ``now``, oldest first."""
+    first = bisect.bisect_left(samples, reset - period - CYCLE_RESET_TOLERANCE, key=lambda item: item.ts)
+    window = []
+    for sample in samples[first:]:
         if sample.ts > now:
             break
         if _same_window(sample, reset):
-            oldest_recent = sample
-            break
-    if oldest_recent is None or now - oldest_recent.ts < _RECENT_MIN_SECONDS:
-        return average
-    recent = max(0.0, (utilization - oldest_recent.utilization) / (now - oldest_recent.ts))
-    return _RECENT_WEIGHT * recent + (1 - _RECENT_WEIGHT) * average
+            window.append(sample)
+    return window
+
+
+def _recent_pace(window: Sequence[Sample], utilization: float, now: float) -> float | None:
+    """Points per second since the oldest reading of the last half hour; None without one, or when it is under ten minutes old."""
+    index = bisect.bisect_left(window, now - _RECENT_SECONDS, key=lambda item: item.ts)
+    if index == len(window) or now - window[index].ts < _RECENT_MIN_SECONDS:
+        return None
+    oldest = window[index]
+    return max(0.0, (utilization - oldest.utilization) / (now - oldest.ts))
+
+
+def _fastest_quarter_hour(window: Sequence[Sample], utilization: float, now: float) -> float:
+    """Highest pace, in points per second, between two readings at least a quarter-hour apart; 0 without such a pair.
+
+    Every reading is compared with the latest one at least a quarter-hour
+    before it, and the current utilization counts as a reading at ``now``.
+    """
+    readings = [*window, Sample(now, utilization, None)]
+    fastest = 0.0
+    earlier = 0
+    for index, reading in enumerate(readings):
+        while earlier + 1 < index and reading.ts - readings[earlier + 1].ts >= _QUARTER_HOUR:
+            earlier += 1
+        span = reading.ts - readings[earlier].ts
+        if span >= _QUARTER_HOUR:
+            fastest = max(fastest, (reading.utilization - readings[earlier].utilization) / span)
+    return fastest
+
+
+def _limit_time(utilization: float, rate: float, now: float, reset: float) -> float | None:
+    """Unix time at which ``rate`` reaches the limit, or None when it lasts until the reset."""
+    if rate <= 0:
+        return None
+    moment = now + (100.0 - utilization) / rate
+    return moment if moment <= reset else None
 
 
 def _typical_growth(

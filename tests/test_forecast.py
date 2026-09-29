@@ -2,8 +2,9 @@
 Forecast Tests
 ==============
 
-Unit tests for quota outlooks: session pace, multi-day history and average
-projections, status thresholds, blocked providers and cycle splitting.
+Unit tests for quota outlooks: session pace and its band, multi-day history
+and average projections, status thresholds, blocked providers and cycle
+splitting.
 """
 from __future__ import annotations
 
@@ -161,6 +162,92 @@ class TestSessionPace(unittest.TestCase):
         outlook = quota_outlook('five_hour', 60.0, _iso(self.RESET), [], now=NOW, day_end=NOW + 2 * HOUR)
 
         self.assertEqual(outlook.day_end_pct, 100.0)
+
+
+class TestSessionBand(unittest.TestCase):
+    """A session's forecast spans a slow and a fast pace around the likely one."""
+
+    RESET = NOW + 2.5 * HOUR  # half of a five-hour window has passed
+
+    def test_without_readings_the_band_is_the_average_pace(self):
+        outlook = quota_outlook('five_hour', 60.0, _iso(self.RESET), [], now=NOW)
+
+        self.assertEqual((outlook.forecast_low_pct, outlook.forecast_high_pct), (100.0, 100.0))
+        self.assertAlmostEqual(outlook.limit_earliest, outlook.limit_at)
+        self.assertAlmostEqual(outlook.limit_latest, outlook.limit_at)
+
+    def test_the_likely_limit_lies_within_the_band(self):
+        """Recent 30 points per hour, average 24: the limit falls between the two paces."""
+        samples = [Sample(NOW - 20 * 60, 50.0, self.RESET)]
+        outlook = quota_outlook('five_hour', 60.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertAlmostEqual(outlook.limit_earliest, NOW + 40 / 30 * HOUR)
+        self.assertAlmostEqual(outlook.limit_at, NOW + 40 / 27.6 * HOUR)
+        self.assertAlmostEqual(outlook.limit_latest, NOW + 40 / 24 * HOUR)
+
+    def test_a_slow_pace_that_lasts_until_the_reset_has_no_latest_limit(self):
+        """Recent 30 points per hour, average 16: only the faster paces reach the limit."""
+        samples = [Sample(NOW - 20 * 60, 30.0, self.RESET)]
+        outlook = quota_outlook('five_hour', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertEqual(outlook.status, 'limit')
+        self.assertAlmostEqual(outlook.forecast_low_pct, 80.0)
+        self.assertEqual(outlook.forecast_high_pct, 100.0)
+        self.assertAlmostEqual(outlook.limit_earliest, NOW + 2 * HOUR)
+        self.assertIsNone(outlook.limit_latest)
+
+    def test_a_pause_keeps_the_slow_end_at_the_current_usage(self):
+        samples = [Sample(NOW - 30 * 60, 60.0, self.RESET), Sample(NOW - 15 * 60, 60.0, self.RESET)]
+        outlook = quota_outlook('five_hour', 60.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertEqual(outlook.status, 'ok')
+        self.assertEqual(outlook.forecast_low_pct, 60.0)
+        # The window's average of 24 points per hour is the fast end.
+        self.assertAlmostEqual(outlook.limit_earliest, NOW + 40 / 24 * HOUR)
+        self.assertIsNone(outlook.limit_latest)
+
+    def test_the_fastest_quarter_hour_of_the_window_is_the_fast_end(self):
+        """20 points in the quarter-hour after the first reading is 80 points per hour."""
+        samples = [
+            Sample(NOW - 2 * HOUR, 10.0, self.RESET),
+            Sample(NOW - 1.75 * HOUR, 30.0, self.RESET),
+            Sample(NOW - 30 * 60, 50.0, self.RESET),
+        ]
+        outlook = quota_outlook('five_hour', 55.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertEqual(outlook.status, 'tight')
+        self.assertAlmostEqual(outlook.forecast_low_pct, 80.0)
+        self.assertAlmostEqual(outlook.limit_earliest, NOW + 45 / 80 * HOUR)
+        self.assertIsNone(outlook.limit_at)
+
+    def test_readings_closer_than_a_quarter_hour_are_not_a_fast_pace(self):
+        """Ten points in five minutes would be 120 points per hour."""
+        samples = [Sample(NOW - 2 * HOUR, 10.0, self.RESET), Sample(NOW - 115 * 60, 20.0, self.RESET)]
+        outlook = quota_outlook('five_hour', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertAlmostEqual(outlook.forecast_high_pct, outlook.forecast_pct)
+
+    def test_readings_of_another_window_do_not_widen_the_band(self):
+        samples = [Sample(NOW - HOUR, 0.0, self.RESET - 5 * HOUR), Sample(NOW - 40 * 60, 90.0, self.RESET - 5 * HOUR)]
+        outlook = quota_outlook('five_hour', 20.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertAlmostEqual(outlook.forecast_low_pct, 40.0)
+        self.assertAlmostEqual(outlook.forecast_high_pct, 40.0)
+
+    def test_readings_after_now_are_ignored(self):
+        samples = [Sample(NOW + 20 * 60, 99.0, self.RESET)]
+        outlook = quota_outlook('five_hour', 20.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertAlmostEqual(outlook.forecast_high_pct, 40.0)
+
+    def test_only_sessions_have_a_band(self):
+        weekly = quota_outlook('seven_day', 20.0, _iso(NOW + 3 * DAY), [], now=NOW)
+        blocked = quota_outlook('five_hour', 100.0, _iso(self.RESET), [], now=NOW)
+        disabled = quota_outlook('five_hour', 60.0, _iso(self.RESET), [], now=NOW, forecast=False)
+
+        for outlook in (weekly, blocked, disabled):
+            band = (outlook.forecast_low_pct, outlook.forecast_high_pct, outlook.limit_earliest, outlook.limit_latest)
+            self.assertEqual(band, (None, None, None, None))
 
 
 class TestMultiDayAverage(unittest.TestCase):
