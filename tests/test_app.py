@@ -1445,6 +1445,52 @@ class TestQuotaOutlooks(unittest.TestCase):
         self.assertEqual(outlooks['seven_day'].status, 'blocked')
 
 
+class TestQuotaInsights(unittest.TestCase):
+    """Tests for quota_insights(), the popup's outlooks and daily budgets."""
+
+    def setUp(self):
+        self.app = _make_app()
+        self.now = time.time()
+        self.app.cache = MagicMock()
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _usage(self, pct: float, hours: float, field: str) -> dict:
+        reset = datetime.fromtimestamp(self.now + hours * 3600, tz=timezone.utc).isoformat()
+        return {field: {'utilization': pct, 'resets_at': reset}}
+
+    @patch('agentpulse.settings.BUDGET_WORKDAYS', [0, 1, 2, 3, 4, 5, 6])
+    def test_weekly_quota_gets_todays_budget(self):
+        self.app.cache.snapshot.usage = {**self._usage(30.0, 2, 'five_hour'), **self._usage(40.0, 80, 'seven_day')}
+
+        outlooks, budgets = self.app.quota_insights()
+
+        self.assertEqual(sorted(outlooks['claude']), ['five_hour', 'seven_day'])
+        self.assertEqual(list(budgets['claude']), ['seven_day'])
+
+    @patch('agentpulse.settings.BUDGET_WORKDAYS', [])
+    def test_no_budget_without_workdays(self):
+        self.app.cache.snapshot.usage = self._usage(40.0, 80, 'seven_day')
+
+        self.assertEqual(self.app.quota_insights()[1], {'claude': {}})
+
+    def test_one_pass_over_the_history(self):
+        self.app.cache.snapshot.usage = self._usage(40.0, 80, 'seven_day')
+        history = self.app.dashboard.history
+
+        with patch.object(history, 'series', wraps=history.series) as mock_series:
+            self.app.quota_insights()
+
+        mock_series.assert_called_once()
+
+    def test_outlooks_match_the_insights(self):
+        self.app.cache.snapshot.usage = self._usage(40.0, 1, 'five_hour')
+
+        with patch('agentpulse.app.time.time', return_value=self.now):
+            self.assertEqual(self.app.quota_outlooks(), self.app.quota_insights()[0])
+
+
 class TestStatusline(unittest.TestCase):
     """Tests for statusline_text() and serving the Claude Code status line."""
 

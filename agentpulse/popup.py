@@ -35,6 +35,7 @@ from .settings import (
 
 if TYPE_CHECKING:
     from .app import AgentPulse
+    from .budget import DailyBudget
     from .cache import CacheSnapshot
     from .forecast import Outlook
 
@@ -72,11 +73,17 @@ def _usage_entries(usage: dict[str, Any]) -> list[tuple[str, dict[str, Any] | No
     return entries
 
 
-def _bar_view(label: str, entry: dict[str, Any], period: int | None, outlook: Outlook | None = None) -> dict[str, Any]:
-    """Build one usage bar: fill, forecast to the reset, status, reset text and time markers.
+def _bar_view(
+    label: str,
+    entry: dict[str, Any],
+    period: int | None,
+    outlook: Outlook | None = None,
+    budget: DailyBudget | None = None,
+) -> dict[str, Any]:
+    """Build one usage bar: fill, forecast to the reset, status, reset text, time markers and today's budget.
 
     Without an outlook (no reset time or unknown window) the bar only tells a
-    reached limit from a usable one.
+    reached limit from a usable one.  Only a weekly quota has a daily budget.
     """
     pct = entry.get('utilization', 0) or 0
     resets_at = entry.get('resets_at', '') or ''
@@ -103,14 +110,27 @@ def _bar_view(label: str, entry: dict[str, Any], period: int | None, outlook: Ou
         'reset_text': time_until(resets_at) if resets_at else '',
         'midnights': midnight_positions(resets_at, period) if period else [],
         'marker_rel': max(0.0, min(1.0, time_pct / 100)) if time_pct is not None else None,
+        'budget_text': _budget_text(budget),
+        'budget_over': budget is not None and round(budget.used) > round(budget.allowance),
     }
 
 
-def _usage_view(usage: dict[str, Any] | None, outlooks: dict[str, Outlook] | None = None) -> list[dict[str, Any]]:
+def _budget_text(budget: DailyBudget | None) -> str:
+    if budget is None:
+        return ''
+    return T['budget_today'].format(used=f'{budget.used:.0f}', allowance=f'{budget.allowance:.0f}')
+
+
+def _usage_view(
+    usage: dict[str, Any] | None,
+    outlooks: dict[str, Outlook] | None = None,
+    budgets: dict[str, DailyBudget] | None = None,
+) -> list[dict[str, Any]]:
     if not usage:
         return []
     known = outlooks or {}
-    return [_bar_view(label, entry, period, known.get(key)) for label, entry, period, key in _usage_entries(usage) if entry]
+    daily = budgets or {}
+    return [_bar_view(label, entry, period, known.get(key), daily.get(key)) for label, entry, period, key in _usage_entries(usage) if entry]
 
 
 def _status_view(usage: dict[str, Any] | None, last_error: str | None, last_success_time: float | None, refreshing: bool, next_poll_time: float | None) -> dict[str, Any]:
@@ -149,24 +169,30 @@ def _snapshot_to_dict(
     installations: list[dict[str, str]] | None = None,
     next_poll_time: float | None = None,
     outlooks: dict[str, Outlook] | None = None,
+    budgets: dict[str, DailyBudget] | None = None,
 ) -> dict[str, Any]:
     if installations is None:
         installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
     return {
         'profile': _profile_view(snap.profile),
-        'usage': _usage_view(snap.usage, outlooks),
+        'usage': _usage_view(snap.usage, outlooks, budgets),
         'extra': _extra_view(snap.usage),
         'installations': installations,
         'status': _status_view(snap.usage, snap.last_error, snap.last_success_time, snap.refreshing, next_poll_time),
     }
 
 
-def _secondary_snapshot_to_dict(snap: UsageSnapshot, cli_version: str | None = None, outlooks: dict[str, Outlook] | None = None) -> dict[str, Any]:
+def _secondary_snapshot_to_dict(
+    snap: UsageSnapshot,
+    cli_version: str | None = None,
+    outlooks: dict[str, Outlook] | None = None,
+    budgets: dict[str, DailyBudget] | None = None,
+) -> dict[str, Any]:
     """Build the popup view-model for a non-Claude provider."""
     installations = [{'name': 'CLI', 'version': cli_version}] if cli_version else []
     return {
         'profile': _profile_view(snap.profile),
-        'usage': _usage_view(snap.usage, outlooks),
+        'usage': _usage_view(snap.usage, outlooks, budgets),
         'extra': None,
         'installations': installations,
         'status': _status_view(snap.usage, snap.last_error, snap.last_success_time, snap.refreshing, None),
@@ -199,6 +225,7 @@ def _init_config(
     secondary: list[tuple[str, dict[str, Any]]] | None = None,
     next_poll_time: float | None = None,
     outlooks: dict[str, Outlook] | None = None,
+    budgets: dict[str, dict[str, DailyBudget]] | None = None,
 ) -> dict[str, Any]:
     return {
         'colors': {
@@ -250,7 +277,10 @@ def _init_config(
             'show_install_section': settings.SHOW_INSTALL_SECTION,
             'email_display': settings.EMAIL_DISPLAY,
         },
-        'providers': _provider_entries(_snapshot_to_dict(snap, next_poll_time=next_poll_time, outlooks=(outlooks or {}).get('claude')), secondary or []),
+        'providers': _provider_entries(
+            _snapshot_to_dict(snap, next_poll_time=next_poll_time, outlooks=(outlooks or {}).get('claude'), budgets=(budgets or {}).get('claude')),
+            secondary or [],
+        ),
     }
 
 
@@ -323,12 +353,13 @@ class UsagePopup:
         self._closed.wait()
 
     def _on_loaded(self) -> None:
-        outlooks = self.app.quota_outlooks()
+        outlooks, budgets = self.app.quota_insights()
         config = _init_config(
             self.app.cache.snapshot,
-            secondary=self._secondary_views(outlooks),
+            secondary=self._secondary_views(outlooks, budgets),
             next_poll_time=self.app.next_poll_time,
             outlooks=outlooks,
+            budgets=budgets,
         )
         self._window.evaluate_js(f'init({json.dumps(config)})')
         self._popup_hwnd = self._window.native.Handle.ToInt32()
@@ -440,18 +471,25 @@ class UsagePopup:
                     installations = [{'name': item.name, 'version': item.version} for item in find_installations()]
                 self._last_secondary_versions = versions
                 last_poll = poll_now
-                outlooks = self.app.quota_outlooks()
-                claude_data = _snapshot_to_dict(snap, installations=installations, next_poll_time=poll_now, outlooks=outlooks.get('claude'))
+                outlooks, budgets = self.app.quota_insights()
+                claude_data = _snapshot_to_dict(
+                    snap, installations=installations, next_poll_time=poll_now, outlooks=outlooks.get('claude'), budgets=budgets.get('claude'),
+                )
                 entries = [{'id': 'claude', 'data': claude_data}]
-                entries.extend({'id': name, 'data': data} for name, data in self._secondary_views(outlooks))
+                entries.extend({'id': name, 'data': data} for name, data in self._secondary_views(outlooks, budgets))
                 self._window.evaluate_js(f'updateProviders({json.dumps(entries)})')
             except Exception:
                 return
 
-    def _secondary_views(self, outlooks: dict[str, dict[str, Outlook]]) -> list[tuple[str, dict[str, Any]]]:
+    def _secondary_views(
+        self,
+        outlooks: dict[str, dict[str, Outlook]],
+        budgets: dict[str, dict[str, DailyBudget]] | None = None,
+    ) -> list[tuple[str, dict[str, Any]]]:
         """Build the popup view-model of every active non-Claude provider."""
+        daily = budgets or {}
         return [
-            (name, _secondary_snapshot_to_dict(cache.snapshot, self._cli_versions.get(name), outlooks.get(name)))
+            (name, _secondary_snapshot_to_dict(cache.snapshot, self._cli_versions.get(name), outlooks.get(name), daily.get(name)))
             for name, cache in self._secondary
         ]
 

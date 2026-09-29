@@ -1262,6 +1262,72 @@ class TestAwaySummarySettings(unittest.TestCase):
                 settings_mod.reload()
 
 
+class TestBudgetWorkdaysSettings(unittest.TestCase):
+    """Tests for the budget_workdays setting (daily budget of weekly quotas)."""
+
+    def _run_validate(self, data: dict) -> tuple[dict, MagicMock]:
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate(dict(data), Path('/fake/settings.json'))
+        return result, mock_ctypes
+
+    def test_monday_to_friday_without_a_settings_file(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.reload()
+                    self.assertEqual(settings_mod.BUDGET_WORKDAYS, [0, 1, 2, 3, 4])
+            finally:
+                # Back to the values of the real settings files.
+                settings_mod.reload()
+
+    def test_file_days_are_sorted_without_duplicates(self):
+        result, mock = self._run_validate({'budget_workdays': [5, 0, 5, 6]})
+
+        self.assertEqual(result['budget_workdays'], [0, 5, 6])
+        mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_empty_list_is_valid(self):
+        result, _mock = self._run_validate({'budget_workdays': []})
+
+        self.assertEqual(result['budget_workdays'], [])
+
+    def test_file_drops_invalid_days_with_a_message(self):
+        for value in ([7], [-1], [True], ['mon'], 'mon', 3):
+            with self.subTest(value=value):
+                result, mock = self._run_validate({'budget_workdays': value})
+                self.assertNotIn('budget_workdays', result)
+                mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_dashboard_can_change_the_days(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'budget_workdays': [4, 0, 1]})
+
+        self.assertEqual((accepted, errors), ({'budget_workdays': [0, 1, 4]}, []))
+
+    def test_dashboard_rejects_invalid_days(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'budget_workdays': [9]})
+
+        self.assertEqual(accepted, {})
+        self.assertTrue(errors)
+
+    def test_dashboard_settings_expose_the_days(self):
+        self.assertIsInstance(settings_mod.dashboard_settings()['budget_workdays'], list)
+
+    def test_saved_days_apply_without_a_restart(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    ok, _errors, _path = settings_mod.save_dashboard_settings({'budget_workdays': [5, 6]})
+                    self.assertTrue(ok)
+                    self.assertEqual(settings_mod.BUDGET_WORKDAYS, [5, 6])
+            finally:
+                settings_mod.reload()
+
+
 class TestPopupColorSettings(unittest.TestCase):
     """Tests for the tight bar colour and the provider colours."""
 

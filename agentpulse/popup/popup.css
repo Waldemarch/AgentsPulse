@@ -175,6 +175,15 @@ dd { margin: 0; }
 .chip.hidden,
 .bar-footer.hidden { display: none; }
 
+.budget-text {
+  color: var(--fg-dim);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.budget-text.over { color: var(--bar-fg-tight); }
+.budget-text.hidden { display: none; }
+
 .bar-container {
   background: var(--bar-bg);
   border-radius: 5px;

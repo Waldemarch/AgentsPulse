@@ -905,6 +905,18 @@ main {
 
 .choices input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* Weekday chips are checkboxes too, but they look like the choices around them, not like switches. */
+.set-group .choices input[type="checkbox"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-height: 0;
+    border: 0;
+    background: none;
+}
+
+.set-group .choices input[type="checkbox"]::after { content: none; }
+
 .inline-actions {
     display: flex;
     justify-content: flex-end;

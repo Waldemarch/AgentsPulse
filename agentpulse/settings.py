@@ -11,6 +11,7 @@ from typing import Any
 
 __all__ = [
     'ALERT_TIME_AWARE', 'ALERT_TIME_AWARE_BELOW', 'AWAY_SUMMARY_ENABLED',
+    'BUDGET_WORKDAYS',
     'BAR_BG', 'BAR_DIVIDER', 'BAR_FG', 'BAR_FG_TIGHT', 'BAR_FG_WARN', 'BAR_MARKER', 'BG',
     'CODEX_ENABLED', 'CURRENCY_SYMBOL',
     'DASHBOARD_HOST', 'DASHBOARD_PORT',
@@ -67,6 +68,7 @@ _DASHBOARD_KEYS = {
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
     'show_install_section', 'email_display', 'icon_style', 'statusline_enabled', 'away_summary_enabled',
+    'budget_workdays',
 }
 
 
@@ -106,6 +108,15 @@ def _message_box(title: str, body: str) -> None:
         ctypes.windll.user32.MessageBoxW(0, body, title, 0x30)
     except Exception:
         pass
+
+
+def _weekday_list(value: object) -> list[int] | None:
+    """Return the weekday numbers (0-6, Monday = 0) sorted and without duplicates, or None when invalid."""
+    if not isinstance(value, list):
+        return None
+    if any(isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 6 for item in value):
+        return None
+    return sorted(set(value))
 
 
 def _valid_time(value: object) -> bool:
@@ -187,6 +198,12 @@ def _validate(data: dict[str, Any], path: Path) -> dict[str, Any]:
         elif key == 'icon_style':
             if value not in ICON_STYLES:
                 reject(key, f'expected one of {ICON_STYLES}')
+        elif key == 'budget_workdays':
+            workdays = _weekday_list(value)
+            if workdays is None:
+                reject(key, 'expected an array of weekday numbers 0-6 (Monday = 0)')
+            else:
+                cleaned[key] = workdays
         elif key in _BOOLEANS:
             if not isinstance(value, bool):
                 reject(key, f'expected true or false, got {type(value).__name__}')
@@ -329,6 +346,12 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = value
             else:
                 errors.append(f'{key}: invalid value')
+        elif key == 'budget_workdays':
+            workdays = _weekday_list(value)
+            if workdays is not None:
+                accepted[key] = workdays
+            else:
+                errors.append(f'{key}: invalid value')
         else:
             errors.append(f'{key}: unsupported')
     return accepted, errors
@@ -357,6 +380,7 @@ def dashboard_settings() -> dict[str, object]:
         'icon_style': ICON_STYLE,
         'statusline_enabled': STATUSLINE_ENABLED,
         'away_summary_enabled': AWAY_SUMMARY_ENABLED,
+        'budget_workdays': BUDGET_WORKDAYS,
     }
 
 
@@ -400,6 +424,8 @@ PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
 HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
 STATUSLINE_ENABLED = _S.get('statusline_enabled', False)
 AWAY_SUMMARY_ENABLED = _S.get('away_summary_enabled', True)
+# Weekdays the daily budget spreads a weekly quota over, Monday = 0.
+BUDGET_WORKDAYS = _S.get('budget_workdays', [0, 1, 2, 3, 4])
 QUIET_HOURS_ENABLED = _S.get('quiet_hours_enabled', False)
 QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
 QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
@@ -485,7 +511,7 @@ def reload() -> None:
     modules that cache them locally).
     """
     global _S
-    global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END, AWAY_SUMMARY_ENABLED
+    global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END, AWAY_SUMMARY_ENABLED, BUDGET_WORKDAYS
     global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
     global HEATMAP_ENABLED, STATUSLINE_ENABLED, CODEX_ENABLED, KIMI_ENABLED
@@ -499,6 +525,7 @@ def reload() -> None:
     QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
     QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
     AWAY_SUMMARY_ENABLED = _S.get('away_summary_enabled', True)
+    BUDGET_WORKDAYS = _S.get('budget_workdays', [0, 1, 2, 3, 4])
     ON_RESET_COMMAND = _S.get('on_reset_command', [])
     ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
     PREDICTION_ENABLED = _S.get('prediction_enabled', True)

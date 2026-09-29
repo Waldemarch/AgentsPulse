@@ -383,7 +383,9 @@ function makeBar(entry) {
   const detail = document.createElement('span');
   detail.className = 'reset-text';
   footer.append(chip, detail);
-  wrapper.append(header, track, footer);
+  const budget = document.createElement('div');
+  budget.className = 'budget-text';
+  wrapper.append(header, track, footer, budget);
   updateBar(wrapper, entry, true);
   return wrapper;
 }
@@ -416,6 +418,11 @@ function updateBar(wrapper, entry, fresh = false) {
   chip.classList.toggle('hidden', !entry.status_text);
   wrapper.querySelector('.reset-text').textContent = entry.reset_text || '';
   wrapper.querySelector('.bar-footer').classList.toggle('hidden', !entry.status_text && !entry.reset_text);
+  // Today's share of a weekly quota; above it, the text takes the tight colour.
+  const budget = wrapper.querySelector('.budget-text');
+  budget.textContent = entry.budget_text || '';
+  budget.classList.toggle('hidden', !entry.budget_text);
+  budget.classList.toggle('over', !!entry.budget_over);
 }
 
 function addMarkers(track, entry) {

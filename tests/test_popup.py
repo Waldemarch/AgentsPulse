@@ -11,8 +11,10 @@ import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+from agentpulse.budget import DailyBudget
 from agentpulse.cache import CacheSnapshot
 from agentpulse.forecast import Outlook
+from agentpulse.formatting import popup_label
 from agentpulse.i18n import T
 from agentpulse.popup import (
     UsagePopup, _BASELINE_DPI, _PopupApi, _init_config, _provider_entries,
@@ -635,6 +637,53 @@ class TestSecondarySnapshotToDict(unittest.TestCase):
 
     def test_missing_cli_version_yields_no_rows(self):
         self.assertEqual(_secondary_snapshot_to_dict(_snap(), None)['installations'], [])
+
+
+class TestDailyBudgetView(unittest.TestCase):
+    """Tests for today's budget under the weekly bar."""
+
+    def _usage(self) -> dict:
+        return {
+            'five_hour': {'utilization': 30.0, 'resets_at': '2099-01-01T00:00:00+00:00'},
+            'seven_day': {'utilization': 52.0, 'resets_at': '2099-01-05T00:00:00+00:00'},
+        }
+
+    def _bars(self, data: dict) -> dict:
+        return {entry['label']: entry for entry in data['usage']}
+
+    def test_weekly_bar_names_todays_budget(self):
+        bars = self._bars(_snapshot_to_dict(_snap(usage=self._usage()), installations=[], budgets={'seven_day': DailyBudget(12.4, 27.6, 4)}))
+
+        weekly = bars[popup_label('seven_day')]
+        self.assertEqual(weekly['budget_text'], T['budget_today'].format(used='12', allowance='28'))
+        self.assertFalse(weekly['budget_over'])
+        self.assertEqual(bars[popup_label('five_hour')]['budget_text'], '')
+
+    def test_more_than_the_budget_is_flagged(self):
+        bars = self._bars(_snapshot_to_dict(_snap(usage=self._usage()), installations=[], budgets={'seven_day': DailyBudget(30.0, 27.0, 4)}))
+
+        self.assertTrue(bars[popup_label('seven_day')]['budget_over'])
+
+    def test_equal_after_rounding_is_not_over(self):
+        bars = self._bars(_snapshot_to_dict(_snap(usage=self._usage()), installations=[], budgets={'seven_day': DailyBudget(27.4, 27.0, 4)}))
+
+        self.assertFalse(bars[popup_label('seven_day')]['budget_over'])
+
+    def test_without_a_budget_the_line_stays_out(self):
+        weekly = self._bars(_snapshot_to_dict(_snap(usage=self._usage()), installations=[]))[popup_label('seven_day')]
+
+        self.assertEqual((weekly['budget_text'], weekly['budget_over']), ('', False))
+
+    def test_secondary_provider_shows_its_own_budget(self):
+        data = _secondary_snapshot_to_dict(_snap(usage=self._usage()), None, None, {'seven_day': DailyBudget(1.0, 20.0, 5)})
+
+        self.assertEqual(self._bars(data)[popup_label('seven_day')]['budget_text'], T['budget_today'].format(used='1', allowance='20'))
+
+    def test_init_config_passes_claudes_budget(self):
+        config = _init_config(_snap(usage=self._usage()), budgets={'claude': {'seven_day': DailyBudget(2.0, 10.0, 3)}})
+
+        bars = self._bars(config['providers'][0]['data'])
+        self.assertEqual(bars[popup_label('seven_day')]['budget_text'], T['budget_today'].format(used='2', allowance='10'))
 
 
 class TestProviderEntries(unittest.TestCase):
