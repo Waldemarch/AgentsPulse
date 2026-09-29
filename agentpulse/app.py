@@ -16,6 +16,7 @@ import pystray  # type: ignore[import-untyped]
 from .api import api_headers
 from .autostart import is_autostart_enabled, set_autostart, sync_autostart_path
 from .away import away_summary
+from .budget import DailyBudget, usage_budgets
 from .cache import UsageCache
 from .claude_cli import PROJECT_URL
 from .codex_api import read_access_token as read_codex_access_token
@@ -350,15 +351,26 @@ class AgentPulse:
     def quota_outlooks(self) -> dict[str, dict[str, Outlook]]:
         """Return the outlook of every quota of every active provider, keyed by provider and field.
 
-        Public: the popup uses the same outlooks as the tooltip.
+        Public: the tooltip and the status line use these outlooks.
+        """
+        return self.quota_insights()[0]
+
+    def quota_insights(self) -> tuple[dict[str, dict[str, Outlook]], dict[str, dict[str, DailyBudget]]]:
+        """Return every quota's outlook and today's budget of every weekly quota, keyed by provider and field.
+
+        Public: the popup shows both.  They share one pass over the usage
+        history, which is what takes the time.
         """
         now = time.time()
         series = self.dashboard.history.series(since=now - _OUTLOOK_HISTORY_SECONDS)
         providers = [('claude', self.cache.snapshot), *((name, cache.snapshot) for name, cache in self.secondary_providers())]
         outlooks: dict[str, dict[str, Outlook]] = {}
+        budgets: dict[str, dict[str, DailyBudget]] = {}
         for name, snapshot in providers:
-            outlooks[name] = usage_outlooks(snapshot.usage, series.get(name, {}), now=now, forecast=_settings.PREDICTION_ENABLED)
-        return outlooks
+            readings = series.get(name, {})
+            outlooks[name] = usage_outlooks(snapshot.usage, readings, now=now, forecast=_settings.PREDICTION_ENABLED)
+            budgets[name] = usage_budgets(snapshot.usage, readings, now=now, workdays=_settings.BUDGET_WORKDAYS)
+        return outlooks, budgets
 
     def statusline_text(self, *, provider: str | None = None, color: bool = True) -> str:
         """Return the one-line usage summary for the Claude Code status line.

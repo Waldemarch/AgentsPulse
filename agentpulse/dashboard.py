@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from . import settings as _settings
+from .budget import usage_budgets
 from .claude_cli import find_installations
 from .forecast import CYCLE_RESET_TOLERANCE, Sample, next_local_time, quota_cycles, reset_timestamp, usage_outlooks
 from .formatting import field_period, field_sort_key, parse_field_name, popup_label, time_until
@@ -608,6 +609,7 @@ def _dashboard_i18n() -> dict[str, str]:
         'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
         'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
         'group_statusline', 'statusline_enabled', 'statusline_hint', 'copy', 'copied',
+        'budget_today', 'budget_workdays',
         'icon_style', 'icon_bars', 'icon_rings', 'icon_number', 'restart_note',
         'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'away_summary', 'tooltip_fields', 'predictions',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
@@ -766,7 +768,8 @@ def _status_payload(app: AgentPulse) -> dict[str, Any]:
     predictions = bool(settings.get('prediction_enabled', True))
     day_end = next_local_time(str(settings.get('prediction_day_end_time', '18:00')), now=now) if predictions else None
     series = app.dashboard.history.series(since=now - _RANGES['30d'])
-    context = _OutlookContext(now=now, day_end=day_end, predictions=predictions)
+    workdays = tuple(settings.get('budget_workdays') or ())
+    context = _OutlookContext(now=now, day_end=day_end, predictions=predictions, workdays=workdays)
     return {
         'app': {'name': 'Agents Pulse', 'version': __version__},
         'privacy': {
@@ -801,6 +804,7 @@ class _OutlookContext:
     now: float
     day_end: float | None
     predictions: bool
+    workdays: tuple[int, ...] = ()
 
 
 def _secondary_provider_payloads(app: AgentPulse, series: dict[str, dict[str, list[Sample]]], context: _OutlookContext) -> list[dict[str, Any]]:
@@ -820,8 +824,9 @@ def _provider_payload(
     series: dict[str, list[Sample]],
     context: _OutlookContext,
 ) -> dict[str, Any]:
-    """Build one provider's card: every quota with its outlook and pace trend, in display order."""
+    """Build one provider's card: every quota with its outlook, pace trend and daily budget, in display order."""
     outlooks = usage_outlooks(snap.usage, series, now=context.now, day_end=context.day_end, forecast=context.predictions)
+    budgets = usage_budgets(snap.usage, series, now=context.now, workdays=context.workdays)
     usage = []
     for key in sorted(snap.usage, key=field_sort_key):
         value = snap.usage[key]
@@ -840,6 +845,7 @@ def _provider_payload(
             'variant': parsed[2] if parsed else None,
             'outlook': asdict(outlook) if outlook is not None else None,
             'trend': _series_trend(series.get(key, []), key, context.now) if context.predictions else None,
+            'budget': asdict(budgets[key]) if key in budgets else None,
         })
 
     return {

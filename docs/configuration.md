@@ -58,6 +58,14 @@ Each line names the quotas of one provider that reset while you were away (with 
 |-----|---------|-------------|
 | `away_summary_enabled` | `true` | Sum up what happened while you were away in one notification when you come back. Also available in the dashboard's settings panel |
 
+## Daily budget
+
+The popup and the dashboard cards show how much of each weekly quota you can use today and still have it last until the reset, for example `Today: 12 of 27 pp`. The budget is what was left of the quota at the start of today, divided by today and the workdays that remain before the reset. Today always counts, even on a day off you work anyway. In the popup the line takes the tight color once today has used more than its share. Only a provider's longest quota window, its weekly limit, gets a budget; per-model variants are part of it.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `budget_workdays` | `[0, 1, 2, 3, 4]` | Weekdays the budget spreads a weekly quota over, Monday = 0 to Sunday = 6. `[]` hides the daily budget. Also available in the dashboard's settings panel |
+
 ## Tooltip fields
 
 The tray tooltip shows a quick usage summary when you hover over the icon. By default, it displays the session (5h) and weekly (7d) quotas. Use `tooltip_fields` to choose which usage fields appear in the tooltip and in the [Claude Code status line](#claude-code-status-line).
@@ -169,7 +177,7 @@ Use **Open Dashboard** from the tray context menu or the popup's **Dashboard** b
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, the away summary, predictions, heatmap, the Claude Code status line, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, the away summary, predictions, heatmap, the daily budget's workdays, the Claude Code status line, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
 
 History settings:
 

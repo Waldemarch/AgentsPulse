@@ -459,6 +459,11 @@ function quotaDetail(entry, outlook) {
         const target = whenText(state.status.day_end, state.status.now);
         parts.push(fmt(tr('by_time', '{pct}% by {time}'), { pct: Math.round(outlook.day_end_pct), time: target }));
     }
+    // What today may use of a weekly quota so it lasts until the reset.
+    if (entry.budget) {
+        const budget = { used: Math.round(entry.budget.used), allowance: Math.round(entry.budget.allowance) };
+        parts.push(fmt(tr('budget_today', 'today {used} of {allowance} pp'), budget));
+    }
     const trend = trendText(entry.trend);
     if (trend) parts.push(trend);
     return parts.join(' · ');
@@ -1238,6 +1243,8 @@ async function loadSettings() {
     byId('resetCommand').value = (settings.on_reset_command || []).join('\n');
     byId('thresholdCommand').value = (settings.on_threshold_command || []).join('\n');
     byId('statuslineEnabled').checked = !!settings.statusline_enabled;
+    const workdays = settings.budget_workdays || [];
+    for (const input of document.querySelectorAll('input[name="budgetDay"]')) input.checked = workdays.includes(Number(input.value));
     loadStatuslinePreview();
 }
 
@@ -1277,6 +1284,7 @@ async function saveSettings(event) {
         on_reset_command: parseLines(byId('resetCommand').value),
         on_threshold_command: parseLines(byId('thresholdCommand').value),
         statusline_enabled: byId('statuslineEnabled').checked,
+        budget_workdays: Array.from(document.querySelectorAll('input[name="budgetDay"]:checked'), (input) => Number(input.value)),
     };
     if (style) payload.icon_style = style.value;
     const result = await postJson('/api/settings', payload);

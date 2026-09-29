@@ -134,6 +134,18 @@
             <label class="toggle wide"><span data-i18n="predictions">Predictions</span><input id="predictionEnabled" type="checkbox"></label>
             <label class="wide"><span data-i18n="predict_until">Predict day until</span><input id="predictionDayEnd" type="time"></label>
             <label class="toggle wide"><span data-i18n="heatmap">Heatmap</span><input id="heatmapEnabled" type="checkbox"></label>
+            <div class="wide field" role="group" aria-labelledby="budgetDaysLabel">
+                <span id="budgetDaysLabel" data-i18n="budget_workdays">Workdays for the daily budget</span>
+                <div class="segmented choices">
+                    <label><input type="checkbox" name="budgetDay" value="0"><span data-i18n="weekday_0">Mon</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="1"><span data-i18n="weekday_1">Tue</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="2"><span data-i18n="weekday_2">Wed</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="3"><span data-i18n="weekday_3">Thu</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="4"><span data-i18n="weekday_4">Fri</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="5"><span data-i18n="weekday_5">Sat</span></label>
+                    <label><input type="checkbox" name="budgetDay" value="6"><span data-i18n="weekday_6">Sun</span></label>
+                </div>
+            </div>
         </fieldset>
         <fieldset class="set-group">
             <legend data-i18n="group_statusline">Claude Code status line</legend>

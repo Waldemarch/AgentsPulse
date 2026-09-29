@@ -600,6 +600,25 @@ class TestStatusOutlooks(unittest.TestCase):
     def test_predictions_off_has_no_day_end(self):
         self.assertIsNone(self._payload(self._app({}), prediction_enabled=False)['day_end'])
 
+    def test_weekly_quota_carries_todays_budget(self):
+        app = self._app({
+            'five_hour': {'utilization': 30.0, 'resets_at': self._iso(2)},
+            'seven_day': {'utilization': 40.0, 'resets_at': self._iso(80)},
+        })
+
+        usage = self._payload(app, budget_workdays=list(range(7)))['providers'][0]['usage']
+
+        self.assertIsNone(usage[0]['budget'])
+        self.assertEqual(set(usage[1]['budget']), {'used', 'allowance', 'days'})
+        self.assertGreater(usage[1]['budget']['allowance'], 0)
+
+    def test_no_budgets_without_workdays(self):
+        app = self._app({'seven_day': {'utilization': 40.0, 'resets_at': self._iso(80)}})
+
+        usage = self._payload(app, budget_workdays=[])['providers'][0]['usage']
+
+        self.assertIsNone(usage[0]['budget'])
+
     def test_predictions_off_leaves_only_reached_limits(self):
         app = self._app({
             'five_hour': {'utilization': 95.0, 'resets_at': self._iso(1)},
