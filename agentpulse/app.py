@@ -9,12 +9,13 @@ import time
 import traceback
 import webbrowser
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import pystray  # type: ignore[import-untyped]
 
 from .api import api_headers
 from .autostart import is_autostart_enabled, set_autostart, sync_autostart_path
+from .away import away_summary
 from .cache import UsageCache
 from .claude_cli import PROJECT_URL
 from .codex_api import read_access_token as read_codex_access_token
@@ -31,7 +32,7 @@ from .popup import UsagePopup
 from . import settings as _settings
 from .settings import (
     CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
-    KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL,
+    KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL, PROVIDER_LABELS,
     get_alert_thresholds,
 )
 from .statusline import format_statusline
@@ -46,6 +47,8 @@ __all__ = ['AgentPulse', 'UsageMonitorForClaude', 'crash_log']
 _READY_SECONDS = 10 * 60
 # History the quota outlooks compare against: the dashboard keeps 30 days.
 _OUTLOOK_HISTORY_SECONDS = 30 * 24 * 3600
+# An absence at least this long ends with one summary of what happened meanwhile.
+_AWAY_SUMMARY_SECONDS = 15 * 60
 
 
 def _future_iso(**delta: float) -> str:
@@ -97,6 +100,14 @@ def _is_quiet_time(now: datetime | None = None) -> bool:
     return minute >= start or minute < end
 
 
+class _Absence(NamedTuple):
+    """When the user left, on the monotonic clock, each provider's usage then, and the notifications already held back."""
+
+    since: float
+    readings: dict[str, dict[str, Any]]
+    held_back: dict[str, tuple[str, str]]
+
+
 class AgentPulse:
     """System tray controller for Claude, Codex, and Kimi usage data."""
 
@@ -125,6 +136,7 @@ class AgentPulse:
         self._ready_until = 0.0
         self._refresh_lock = threading.Lock()
         self._last_outlooks: dict[str, dict[str, Outlook]] = {}
+        self._absence: _Absence | None = None
 
         self._popup_lock = threading.Lock()
         self._popup_open = False
@@ -362,11 +374,17 @@ class AgentPulse:
         color
             Colour tight quotas and limits with ANSI escape sequences.
         """
-        secondary = [(name, self._secondary_responses.get(name) or {}) for name, _cache in self.secondary_providers()]
-        sections = [('claude', self._last_response), *secondary]
+        sections = list(self._provider_readings().items())
         if provider is not None:
             sections = [section for section in sections if section[0] == provider]
         return format_statusline(sections, self._last_outlooks, fields=_settings.TOOLTIP_FIELDS, now=time.time(), color=color)
+
+    def _provider_readings(self) -> dict[str, dict[str, Any]]:
+        """Each active provider's latest usage response, Claude first; empty before its first reading."""
+        readings = {'claude': self._last_response}
+        for name, _cache in self.secondary_providers():
+            readings[name] = self._secondary_responses.get(name) or {}
+        return readings
 
     def refresh_now(self) -> None:
         """Fetch fresh usage of every provider in the background.
@@ -494,10 +512,42 @@ class AgentPulse:
         return current
 
     def _notify_or_defer(self, category: str, message: str, title: str) -> None:
-        if self._is_user_away() or _is_quiet_time():
+        # While an absence is open, alerts wait for its summary, also those of the first reading after the user is back.
+        if self._is_user_away() or _is_quiet_time() or self._absence is not None:
             self._deferred_notifications[category] = (message, title)
         else:
             self.icon.notify(message, title)
+
+    def _begin_absence(self) -> None:
+        """Remember each provider's usage when the user leaves, for the summary when they come back."""
+        if self._absence is not None or not _settings.AWAY_SUMMARY_ENABLED:
+            return
+        # Idle time counts from the last keyboard or mouse input, so it tells when the user left.
+        self._absence = _Absence(time.monotonic() - get_idle_seconds(), self._provider_readings(), dict(self._deferred_notifications))
+
+    def _welcome_back(self) -> None:
+        """Show the notifications held back while the user was away or during quiet hours.
+
+        After an absence of at least :data:`_AWAY_SUMMARY_SECONDS`, one summary
+        of every provider's quotas takes the place of the reset and threshold
+        alerts held back meanwhile.  Other held-back notifications, such as an
+        account switch or an extra-usage alert, are shown as well, and so are
+        quota alerts that were already waiting (during quiet hours) before the
+        user left, because the summary only covers the time they were away.
+        """
+        absence, self._absence = self._absence, None
+        if absence is not None:
+            away_seconds = time.monotonic() - absence.since
+            if away_seconds >= _AWAY_SUMMARY_SECONDS:
+                ended = time.time()
+                summary = away_summary(absence.readings, self._provider_readings(), started=ended - away_seconds, ended=ended)
+                if summary is not None:
+                    held_back = {
+                        category: note for category, note in self._deferred_notifications.items()
+                        if not _is_quota_alert(category) or absence.held_back.get(category) == note
+                    }
+                    self._deferred_notifications = {**held_back, 'away_summary': summary}
+        self._flush_deferred_notifications()
 
     def _flush_deferred_notifications(self) -> None:
         if _is_quiet_time():
@@ -653,6 +703,7 @@ class AgentPulse:
 
     def _wait_for_activity(self, until: float | None = None) -> None:
         while self.running and self._is_user_away():
+            self._begin_absence()
             if until is not None and time.time() >= until:
                 break
             time.sleep(2)
@@ -663,8 +714,8 @@ class AgentPulse:
             cache.ensure_profile()
         while self.running:
             self.update()
-            if self._deferred_notifications and not self._is_user_away():
-                self._flush_deferred_notifications()
+            if (self._deferred_notifications or self._absence is not None) and not self._is_user_away():
+                self._welcome_back()
             interval = self._calculate_poll_interval()
             target = time.time() + interval
             self._next_poll_time = target
@@ -681,6 +732,9 @@ class AgentPulse:
                     deadline = self._reset_deadline()
                     self._wait_for_activity(until=deadline)
                     if deadline is not None and self._is_user_away():
+                        break
+                    if self._absence is not None:
+                        # Back from an absence: read fresh usage first, then sum up what happened meanwhile.
                         break
                     self._flush_deferred_notifications()
                     last_success = self.cache.last_success_time
@@ -724,6 +778,18 @@ def _usable_again(usages: list[dict[str, Any]], now: float) -> float | None:
             return None
         moments.append(until)
     return min(moments) if moments else None
+
+
+def _is_quota_alert(category: str) -> bool:
+    """Whether a held-back notification is a quota window's reset or threshold alert, which the away summary covers.
+
+    Claude's alerts are named ``reset`` and ``threshold_<field>``; other
+    providers' alerts carry the provider as a prefix (``codex_reset``).  The
+    extra-usage alert is about money, not a quota window, so it stays.
+    """
+    prefix, _sep, rest = category.partition('_')
+    alert = rest if prefix in PROVIDER_LABELS and prefix != 'claude' else category
+    return alert == 'reset' or (alert.startswith('threshold_') and alert != 'threshold_extra_usage')
 
 
 def _session_utilization(usage: dict[str, Any]) -> float:

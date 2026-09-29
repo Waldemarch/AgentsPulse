@@ -28,6 +28,7 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 - **Forecasts** - every quota tells you whether it lasts until its reset: **On track**, **Tight**, or **Limit ~15:47** when it will run out first. Sessions are projected from their current pace and weekly limits from your own past weeks, so a busy morning is not mistaken for a week that runs out.
 - **Smart alerts** - Windows desktop notifications fire when you cross configurable thresholds (e.g. 50%, 80%, 95% for the session; 95% for the weekly quota). Time-aware mode suppresses alerts when your pace is still within budget, reducing noise.
+- **While you were away** - come back to one notification that sums up your absence: which quotas reset and how much your agents used in the background, instead of a stack of alerts held back while the screen was locked.
 - **Quiet hours** - defer all desktop notifications during a configured time window (e.g. overnight) so you aren't woken by alerts.
 - **Event commands** - run any shell command automatically when a quota resets or a threshold is crossed. Use this to resume a Claude Code session the moment your session quota refreshes, send a Slack message, or check for app updates. Commands run silently in the background without stealing focus.
 
