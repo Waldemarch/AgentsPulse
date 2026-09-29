@@ -240,7 +240,7 @@ class TestSessionBand(unittest.TestCase):
 
         self.assertAlmostEqual(outlook.forecast_high_pct, 40.0)
 
-    def test_only_sessions_have_a_band(self):
+    def test_average_blocked_and_disabled_projections_have_no_band(self):
         weekly = quota_outlook('seven_day', 20.0, _iso(NOW + 3 * DAY), [], now=NOW)
         blocked = quota_outlook('five_hour', 100.0, _iso(self.RESET), [], now=NOW)
         disabled = quota_outlook('five_hour', 60.0, _iso(self.RESET), [], now=NOW, forecast=False)
@@ -301,12 +301,13 @@ class TestMultiDayHistory(unittest.TestCase):
         self.assertEqual(outlook.status, 'ok')
         self.assertIsNone(outlook.limit_at)
 
-    def test_history_can_project_the_limit(self):
+    def test_history_names_when_the_limit_comes(self):
+        """40% now leaves 60 points; last week had added them by its sixth day."""
         samples = self._past_cycle(1, [(3, 10.0), (6, 90.0)])
         outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), samples, now=NOW)
 
         self.assertEqual(outlook.status, 'limit')
-        self.assertIsNone(outlook.limit_at)
+        self.assertEqual(outlook.limit_at, self.RESET - DAY)
 
     def test_cycles_first_seen_after_the_same_point_are_skipped(self):
         samples = self._past_cycle(1, [(5, 40.0), (6, 60.0)])
@@ -319,6 +320,69 @@ class TestMultiDayHistory(unittest.TestCase):
         outlook = quota_outlook('seven_day', 25.0, _iso(self.RESET), samples, now=NOW)
 
         self.assertEqual(outlook.method, 'average')
+
+    def test_band_spans_the_lightest_and_the_busiest_past_cycle(self):
+        samples = (
+            self._past_cycle(3, [(1, 10.0), (3, 20.0), (6, 60.0)])
+            + self._past_cycle(2, [(1, 5.0), (3, 30.0), (6, 50.0)])
+            + self._past_cycle(1, [(1, 8.0), (3, 25.0), (6, 95.0)])
+        )
+        outlook = quota_outlook('seven_day', 25.0, _iso(self.RESET), samples, now=NOW)
+
+        # Growth after day three: 40, 20 and 70 points.
+        self.assertEqual((outlook.forecast_low_pct, outlook.forecast_high_pct), (45.0, 95.0))
+        self.assertIsNone(outlook.limit_earliest)
+        self.assertIsNone(outlook.limit_latest)
+
+    def test_limit_time_is_the_median_of_when_past_cycles_would_run_out(self):
+        """60 points of room: added by day 4, day 5 and day 6 in the three past weeks."""
+        samples = (
+            self._past_cycle(3, [(3, 10.0), (4, 70.0), (6, 90.0)])
+            + self._past_cycle(2, [(3, 10.0), (5, 70.0), (6, 90.0)])
+            + self._past_cycle(1, [(3, 10.0), (6, 70.0)])
+        )
+        outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        start = self.RESET - self.PERIOD
+        self.assertEqual(outlook.status, 'limit')
+        self.assertEqual(outlook.limit_at, start + 5 * DAY)
+        self.assertEqual((outlook.limit_earliest, outlook.limit_latest), (start + 4 * DAY, start + 6 * DAY))
+        self.assertEqual(outlook.forecast_low_pct, 100.0)
+
+    def test_a_week_that_would_have_lasted_ends_the_band_at_the_reset(self):
+        samples = (
+            self._past_cycle(3, [(3, 10.0), (4, 70.0)])
+            + self._past_cycle(2, [(3, 10.0), (5, 75.0)])
+            + self._past_cycle(1, [(3, 10.0), (6, 40.0)])
+        )
+        outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        start = self.RESET - self.PERIOD
+        self.assertEqual(outlook.limit_at, start + 5 * DAY)
+        self.assertEqual(outlook.limit_earliest, start + 4 * DAY)
+        self.assertIsNone(outlook.limit_latest)
+        self.assertAlmostEqual(outlook.forecast_low_pct, 70.0)
+
+    def test_even_cycles_average_the_middle_limit_times(self):
+        samples = self._past_cycle(2, [(3, 10.0), (4, 70.0)]) + self._past_cycle(1, [(3, 10.0), (6, 70.0)])
+        outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertEqual(outlook.limit_at, self.RESET - self.PERIOD + 5 * DAY)
+
+    def test_no_limit_time_when_the_middle_cycles_would_have_lasted(self):
+        """One week of two would have run out, which makes the median growth reach the limit but not its time."""
+        samples = self._past_cycle(2, [(3, 10.0), (4, 90.0)]) + self._past_cycle(1, [(3, 10.0), (6, 50.0)])
+        outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), samples, now=NOW)
+
+        self.assertEqual(outlook.status, 'limit')
+        self.assertIsNone(outlook.limit_at)
+        self.assertEqual(outlook.limit_earliest, self.RESET - self.PERIOD + 4 * DAY)
+
+    def test_one_past_cycle_has_no_band_width(self):
+        outlook = quota_outlook('seven_day', 40.0, _iso(self.RESET), self._past_cycle(1, [(3, 10.0), (6, 90.0)]), now=NOW)
+
+        self.assertEqual(outlook.forecast_low_pct, outlook.forecast_high_pct)
+        self.assertEqual((outlook.limit_earliest, outlook.limit_latest), (outlook.limit_at, outlook.limit_at))
 
     def test_day_end_growth_of_past_cycles(self):
         samples = self._past_cycle(1, [(3, 20.0), (3.25, 26.0), (6, 60.0)])

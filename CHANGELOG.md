@@ -11,7 +11,7 @@
 - Dashboard usage history is now saved to a local file (`agentpulse-history.jsonl`, quota percentages only - never tokens or account data) and survives application restarts. Set `history_persist` to `false` to keep history in memory only.
 - The dashboard's predictions now include a **pace vs. usual** line per quota, comparing how far along the current session or weekly cycle is against your average pace at the same point in past cycles - so you can tell a heavier-than-usual week from a normal one before it runs out.
 - Releases now include a `SHA256SUMS.txt` alongside `AgentsPulse.exe` so the download can be verified.
-- **Forecasts** - every quota now shows whether it lasts until its reset - **On track**, **Tight**, or **Limit ~15:47** when it will run out first - in the popup, the tray tooltip, and the dashboard. Sessions are projected from their current pace and weekly limits from your own past weeks, and a session heading for its limit also names the range it will most likely run out in and how long you would be without quota before the reset.
+- **Forecasts** - every quota now shows whether it lasts until its reset - **On track**, **Tight**, or **Limit ~15:47** when it will run out first - in the popup, the tray tooltip, and the dashboard. Sessions are projected from their current pace and weekly limits from your own past weeks, and a quota heading for its limit also names the range it will most likely run out in and how long you would be without quota before the reset.
 - **Dashboard 2.0** - the dashboard opens with a one-line summary and a card per provider showing every quota's status, its forecast as a lighter segment of the bar, how much of the window has passed, and the projected usage at your end of day.
 - The dashboard's consumption bars show the percentage points each provider used per hour (last 24 hours) or per day, measured on its longest quota so work that counts against several quotas is counted once.
 - Dashboard settings open in a slide-out panel, grouped into notifications, automations, tray and providers, and forecasts.
@@ -21,6 +21,7 @@
 - **Claude Code status line** - turn it on in the dashboard settings and paste the entry shown there into `~/.claude/settings.json` to see every provider's session and weekly usage, the session reset time, and a colored warning for tight quotas or limits right below the Claude Code prompt.
 - **While you were away** - after locking the workstation or leaving it idle for at least 15 minutes, you get one notification that sums up which quotas reset and how much each provider used in the meantime, instead of the separate alerts held back during your absence.
 - **Daily budget** - the popup and the dashboard show how much of each weekly quota you can use today and still have it last until the reset: what is left, spread over today and your remaining workdays (`budget_workdays`, Monday to Friday by default).
+- **This week vs your typical week** - the dashboard draws the current week against your previous weeks and their median, with the forecast that follows your usual rhythm and the range of your past weeks, so a heavier week than usual stands out at a glance.
 
 ### Changed
 

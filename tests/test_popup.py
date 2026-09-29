@@ -7,6 +7,7 @@ and _init_config.
 """
 from __future__ import annotations
 
+import time
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -14,7 +15,7 @@ from unittest.mock import MagicMock, patch
 from agentpulse.budget import DailyBudget
 from agentpulse.cache import CacheSnapshot
 from agentpulse.forecast import Outlook
-from agentpulse.formatting import format_duration, format_outlook, popup_label
+from agentpulse.formatting import format_duration, format_outlook, limit_band, popup_label
 from agentpulse.i18n import T
 from agentpulse.popup import (
     UsagePopup, _BASELINE_DPI, _PopupApi, _init_config, _provider_entries,
@@ -729,6 +730,20 @@ class TestForecastBandView(unittest.TestCase):
         self.assertEqual(bar['limit_text'], f"{band} \u00b7 {T['gap_before_reset'].format(duration=format_duration(70 * 60))}")
         self.assertEqual((bar['band_low'], bar['band_high']), (0.9, 1.0))
         self.assertEqual(bar['forecast_title'], '')
+
+    def test_weekly_limit_line_names_the_days_of_its_band(self):
+        """A band from past weeks spans days, so its ends name the day as well as the time."""
+        now = time.time()
+        outlook = Outlook(
+            'limit', 100.0, now + 26 * 3600, now + 3 * 86400, 60.0, 'history', 4,
+            forecast_low_pct=90.0, forecast_high_pct=100.0, limit_earliest=now + 20 * 3600, limit_latest=now + 2 * 86400,
+        )
+
+        bar = self._bar(outlook)
+
+        earliest, latest = limit_band(outlook)
+        self.assertTrue(bar['limit_text'].startswith(T['limit_between'].format(earliest=earliest, latest=latest)))
+        self.assertIn(T['weekdays'][datetime.fromtimestamp(round((now + 2 * 86400) / 60) * 60).weekday()], latest)
 
     def test_weekly_limit_without_a_band_names_only_the_time_without_quota(self):
         limit_at = self.RESET - 2 * 3600

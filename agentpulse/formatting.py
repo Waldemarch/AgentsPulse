@@ -180,8 +180,8 @@ def format_outlook(outlook: Outlook, *, now: float | None = None, band: bool = F
         Current time as a Unix timestamp, for the day of a limit time;
         defaults to the current time.
     band
-        Add a session's limit band (see :func:`limit_band`) to its limit
-        time, e.g. ``'Limit ~15:47 (15:20-16:30)'``.
+        Add the band of a limit time (see :func:`limit_band`), e.g.
+        ``'Limit ~15:47 (15:20-16:30)'``.
     """
     if outlook.status == 'blocked':
         return T['status_blocked']
@@ -189,7 +189,7 @@ def format_outlook(outlook: Outlook, *, now: float | None = None, band: bool = F
         if outlook.limit_at is None:
             return T['status_limit']
         clock = format_clock(outlook.limit_at, now=now)
-        clocks = limit_band(outlook) if band else None
+        clocks = limit_band(outlook, now=now) if band else None
         if clocks is None:
             return T['status_limit_at'].format(clock=clock)
         return T['status_limit_band'].format(clock=clock, earliest=clocks[0], latest=clocks[1])
@@ -198,27 +198,36 @@ def format_outlook(outlook: Outlook, *, now: float | None = None, band: bool = F
     return T['status_ok']
 
 
-def limit_band(outlook: Outlook) -> tuple[str, str] | None:
-    """Return the local ``HH:MM`` between which a session's limit is most likely reached.
+def limit_band(outlook: Outlook, *, now: float | None = None) -> tuple[str, str] | None:
+    """Return the local times between which a quota's limit is most likely reached.
 
-    The band runs from the fast pace's limit time to the slow pace's, or to
-    the reset when the slow pace lasts that long.  Both ends are rounded to
+    The band runs from its busy end's limit time to its light end's, or to
+    the reset when the light end lasts that long.  Both ends are rounded to
     the nearest minute, like reset times, so a band that ends at the reset
-    names the same time as the reset.  None without a band, or when both
-    ends fall in the same minute.
+    names the same time as the reset.  A session's band stays within hours
+    and names ``HH:MM`` only; a band from past cycles names the day too (see
+    :func:`format_clock`).  None without a band, or when both ends name the
+    same minute.
+
+    Parameters
+    ----------
+    outlook
+        The quota's outlook (see :mod:`agentpulse.forecast`).
+    now
+        Current time as a Unix timestamp, for the day of a band end;
+        defaults to the current time.
     """
     if outlook.limit_earliest is None:
         return None
     latest = outlook.limit_latest if outlook.limit_latest is not None else outlook.reset_at
-    earliest_text = _nearest_minute(outlook.limit_earliest)
-    latest_text = _nearest_minute(latest)
+    ends = [round(moment / 60) * 60 for moment in (outlook.limit_earliest, latest)]
+    if outlook.method == 'pace':
+        earliest_text, latest_text = (datetime.fromtimestamp(end).strftime('%H:%M') for end in ends)
+    else:
+        earliest_text, latest_text = (format_clock(end, now=now) for end in ends)
     if earliest_text == latest_text:
         return None
     return earliest_text, latest_text
-
-
-def _nearest_minute(ts: float) -> str:
-    return datetime.fromtimestamp(round(ts / 60) * 60).strftime('%H:%M')
 
 
 def countdown_label(seconds: float) -> str:

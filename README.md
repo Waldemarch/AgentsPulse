@@ -26,7 +26,7 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 ### Proactive protection
 
-- **Forecasts** - every quota tells you whether it lasts until its reset: **On track**, **Tight**, or **Limit ~15:47** when it will run out first. Sessions are projected from their current pace and weekly limits from your own past weeks, so a busy morning is not mistaken for a week that runs out. Like a weather forecast, a session heading for its limit also tells you the range it will most likely run out in and how long you would be without quota: **Limit ~15:47 (15:20-16:30)**.
+- **Forecasts** - every quota tells you whether it lasts until its reset: **On track**, **Tight**, or **Limit ~15:47** when it will run out first. Sessions are projected from their current pace and weekly limits from your own past weeks, so a busy morning is not mistaken for a week that runs out. Like a weather forecast, a quota heading for its limit also tells you the range it will most likely run out in and how long you would be without quota: **Limit ~15:47 (15:20-16:30)**.
 - **Daily budget** - know how much of your weekly quota today may use so it lasts until the reset, such as "Today: 12 of 27 pp", spread over your own workdays; the popup warns once today goes over its share.
 - **Smart alerts** - Windows desktop notifications fire when you cross configurable thresholds (e.g. 50%, 80%, 95% for the session; 95% for the weekly quota). Time-aware mode suppresses alerts when your pace is still within budget, reducing noise.
 - **While you were away** - come back to one notification that sums up your absence: which quotas reset and how much your agents used in the background, instead of a stack of alerts held back while the screen was locked.
@@ -35,7 +35,7 @@ Monitor Claude, Codex, and Kimi API usage from your Windows system tray. See at 
 
 ### Visual quality
 
-- **Local dashboard** - open a browser dashboard (localhost) from the tray menu or the popup. It starts with a one-line summary and a card per provider with every quota's status and forecast, followed by usage history across 24h, 7d, or 30d in session and weekly panels with a crosshair tooltip and a data table, consumption bars that count each piece of work once, a weekday-by-hour heatmap of when you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme, is shown in your language, and has a slide-out settings panel for alerts, the tray icon style, autostart, and display options.
+- **Local dashboard** - open a browser dashboard (localhost) from the tray menu or the popup. It starts with a one-line summary and a card per provider with every quota's status and forecast, followed by usage history across 24h, 7d, or 30d in session and weekly panels with a crosshair tooltip and a data table, this week drawn against your typical week so a heavier week than usual stands out before it runs out, consumption bars that count each piece of work once, a weekday-by-hour heatmap of when you use the most, and a CSV export. History is stored locally (quota percentages only, never tokens or account data) and survives restarts. The dashboard follows your system light/dark theme, is shown in your language, and has a slide-out settings panel for alerts, the tray icon style, autostart, and display options.
 
 ### Reliability
 

@@ -185,21 +185,21 @@ History settings:
 |-----|---------|-------------|
 | `history_persist` | `true` | Persist dashboard usage history to `agentpulse-history.jsonl` so it survives restarts. Set to `false` for in-memory history only |
 
-The dashboard opens with a one-line summary and a card per provider. Every quota shows its status, its usage with a lighter segment projecting it to the reset, and a marker for how much of the window has passed. Below them, usage history is drawn in one panel per window length (session, weekly) on a shared time axis: hover or focus the chart and use the arrow keys to read every series at one moment, toggle series in the legend, or open the data table for the highest reading per hour (last 24 hours) or per day. Consumption bars show the percentage points each provider used per hour or day, measured on its longest quota window so work that counts against several quotas is counted once, and the heatmap shows the average use per weekday and hour over the last four weeks.
+The dashboard opens with a one-line summary and a card per provider. Every quota shows its status, its usage with a lighter segment projecting it to the reset, and a marker for how much of the window has passed. Below them, usage history is drawn in one panel per window length (session, weekly) on a shared time axis: hover or focus the chart and use the arrow keys to read every series at one moment, toggle series in the legend, or open the data table for the highest reading per hour (last 24 hours) or per day. **This week vs your typical week** draws the current cycle of each provider's longest quota window against its previous cycles, by how far into the window each reading came: the past weeks in grey, their median as the typical week, and this week with its forecast by your usual rhythm inside the range of the past weeks. Consumption bars show the percentage points each provider used per hour or day, measured on its longest quota window so work that counts against several quotas is counted once, and the heatmap shows the average use per weekday and hour over the last four weeks.
 
 Forecasts are calculated locally from the usage history:
 
 - **Session windows** (measured in hours) are projected from their pace: 60% the change over the last half hour, 40% the window's average (counted over at least its first ten minutes). Each session forecast also has a band: the same projection at a slow pace (the lower of the last half hour and the window's average) and at a fast one (the quickest quarter-hour of the window, and at least the higher of the two).
-- **Multi-day windows** (weekly limits) follow your own rhythm: the median usage that past cycles added after the same point of their window, once history holds such cycles. Before that, the average pace over at least one full day is used, so a single working session is not extrapolated across nights and weekends.
+- **Multi-day windows** (weekly limits) follow your own rhythm: the median usage that past cycles added after the same point of their window, once history holds such cycles. The band of such a forecast spans the lightest and the busiest of those cycles, and its limit time is the median of when they would have run out from today's usage. Before history holds a past cycle, the average pace over at least one full day is used, so a single working session is not extrapolated across nights and weekends.
 
 The status follows the forecast at the reset: **On track** below 90%, **Tight** from 90%, **Limit before reset** (or **Limit ~15:47** when a pace gives the time) at 100%, and **Limit reached** once a quota is used up. The popup, the tray tooltip, and the dashboard show the same status.
 
-A session heading for its limit also names the band its limit most likely falls in - from the fast pace's limit time to the slow pace's, or to the reset when the slow pace lasts that long - and how long you would be without quota before the reset:
+A quota heading for its limit also names the band its limit most likely falls in - from the busy end's limit time to the light end's, or to the reset when the light end lasts that long - and how long you would be without quota before the reset:
 
-- the tray tooltip and the Claude Code status line show **Limit ~15:47 (15:20-16:30)**; the tooltip leaves the band out when it would not fit;
-- the popup and the dashboard keep **Limit ~15:47** on the status chip and add **Limit between 15:20 and 16:30 · ~1h 10m without quota before the reset** below the bar.
+- the tray tooltip shows **Limit ~15:47 (15:20-16:30)** and leaves the band out when it would not fit; the Claude Code status line adds the band for sessions only;
+- the popup and the dashboard keep **Limit ~15:47** on the status chip and add **Limit between 15:20 and 16:30 · ~1h 10m without quota before the reset** below the bar. A weekly band names the days too, for example **Limit between tomorrow 13:40 and Thu 17:39**.
 
-A calm or tight session shows the band of its forecast at the reset instead, for example **~62% at reset (48-85%)** in the dashboard and in the popup's hover text. Every session bar marks its band with stripes.
+A calm or tight quota shows the band of its forecast at the reset instead, for example **~62% at reset (48-85%)** in the dashboard and in the popup's hover text. Every bar with a band marks it with stripes.
 
 Prediction and heatmap settings:
 
@@ -241,7 +241,7 @@ Claude 5h 42% ↺14:30 · 7d 61% | Codex 5h 10% ↺16:05 · 7d 3%
 
 The panel's entry uses the port the server actually runs on: `8766`, or the next free port when that one is taken. `curl.exe` ships with Windows 10 (version 1803 and later) and Windows 11; the `.exe` keeps the command working in Windows PowerShell, where `curl` means `Invoke-WebRequest`.
 
-The line shows the tray tooltip's quota fields (`tooltip_fields`) for every active provider. Session windows add the local time of their reset (`↺14:30`). A **Tight** quota turns yellow; a quota heading for its limit or at its limit turns red and names its status, such as **Limit ~13:55**, or **Limit reached** with the time it resets. The text comes from the app's latest reading, so Claude Code's frequent refreshes never cause an API request. While the app is not running, `curl.exe` prints nothing and the status line stays empty.
+The line shows the tray tooltip's quota fields (`tooltip_fields`) for every active provider. Session windows add the local time of their reset (`↺14:30`). A **Tight** quota turns yellow; a quota heading for its limit or at its limit turns red and names its status, such as **Limit ~13:55** (a session adds its band, **Limit ~13:55 (13:20-14:30)**), or **Limit reached** with the time it resets. The text comes from the app's latest reading, so Claude Code's frequent refreshes never cause an API request. While the app is not running, `curl.exe` prints nothing and the status line stays empty.
 
 Query parameters change what the line shows (quote the URL inside the command when you add one):
 

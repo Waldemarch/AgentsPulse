@@ -36,6 +36,7 @@ from .settings import (
     DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST, PROVIDER_LABELS,
     dashboard_settings, history_write_path, save_dashboard_settings,
 )
+from .typical_week import typical_weeks
 from .usage_stats import HEATMAP_DAYS, bucket_starts, consumption_buckets, consumption_field, heatmap_cells
 
 if TYPE_CHECKING:
@@ -604,8 +605,9 @@ def _dashboard_i18n() -> dict[str, str]:
         'table_hour', 'table_day', 'table_note_hour', 'table_note_day',
         'consumption_daily', 'consumption_hourly', 'consumption_meta', 'consumption_meta_mixed', 'pp',
         'heatmap', 'heatmap_cell', 'heatmap_peak', 'heatmap_less', 'heatmap_more',
+        'typical_week', 'typical_verdict', 'typical_caption', 'typical_caption_forecast', 'typical_waiting', 'typical_now', 'typically',
         'meter_used', 'by_time', 'vs_usual_pace',
-        'forecast_from_pace', 'forecast_from_history', 'forecast_from_average', 'forecast_band', 'limit_between',
+        'forecast_from_pace', 'forecast_from_history', 'forecast_from_average', 'forecast_band', 'forecast_band_history', 'limit_between',
         'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
         'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
         'group_statusline', 'statusline_enabled', 'statusline_hint', 'copy', 'copied',
@@ -654,8 +656,9 @@ def _history_payload(history: DashboardHistory, range_name: str, *, now: float |
     -------
     dict
         ``range``, ``bucket_seconds``, ``rows``, ``fields``, ``consumption``
-        (points used per hour or day, see :func:`_consumption_payload`) and
-        ``heatmap`` (see :func:`_heatmap_payload`).
+        (points used per hour or day, see :func:`_consumption_payload`),
+        ``heatmap`` (see :func:`_heatmap_payload`) and ``typical_week``
+        (``providers``, see :func:`agentpulse.typical_week.typical_week`).
     """
     if range_name not in _RANGES:
         range_name = '24h'
@@ -670,6 +673,7 @@ def _history_payload(history: DashboardHistory, range_name: str, *, now: float |
         'fields': _field_metadata(row['field'] for row in rows if row['field']),
         'consumption': _consumption_payload(series, range_name, now=now, tz=tz),
         'heatmap': _heatmap_payload(series, now=now, tz=tz),
+        'typical_week': {'providers': typical_weeks(series, now=now)},
     }
 
 
