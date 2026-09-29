@@ -198,6 +198,7 @@ const state = {
     historyKey: '',
     hidden: new Set(readStored('agentpulse-hidden-series', [])),
     heatProvider: readStored('agentpulse-heat-provider', null),
+    typicalProvider: readStored('agentpulse-typical-provider', null),
 };
 if (!RANGE_SECONDS[state.range]) state.range = '24h';
 
@@ -270,6 +271,7 @@ function render() {
 function renderCharts() {
     safely(renderLegend, 'historyLegend');
     safely(renderHistory, 'historyChart');
+    safely(renderTypicalWeek, 'typicalChart');
     safely(renderConsumption, 'consumptionChart');
     if (byId('historyTable').open) safely(renderHistoryTable, 'historyTableBody');
 }
@@ -315,14 +317,18 @@ function statusText(outlook) {
     return tr('status_ok', 'On track');
 }
 
-// A session's limit falls between the fast pace's limit time and the slow
-// pace's, or the reset when the slow pace lasts that long.  Both ends round
-// to the nearest minute like the reset times, so an end at the reset matches them.
+// A limit falls between its band's busy end and its light end, or the reset
+// when the light end lasts that long.  Both ends round to the nearest minute
+// like the reset times, so an end at the reset matches them.  A session's band
+// names the time only; a band from past cycles names the day too.
 function limitBand(outlook) {
     if (!outlook.limit_earliest) return null;
-    const nearestMinute = (ts) => clock(Math.round(ts / 60) * 60);
-    const earliest = nearestMinute(outlook.limit_earliest);
-    const latest = nearestMinute(outlook.limit_latest || outlook.reset_at);
+    const name = (ts) => {
+        const minute = Math.round(ts / 60) * 60;
+        return outlook.method === 'pace' ? clock(minute) : whenText(minute);
+    };
+    const earliest = name(outlook.limit_earliest);
+    const latest = name(outlook.limit_latest || outlook.reset_at);
     return earliest === latest ? null : { earliest, latest };
 }
 
@@ -352,7 +358,11 @@ function forecastText(outlook) {
 }
 
 function methodNote(outlook) {
-    if (outlook.method === 'history') return fmt(tr('forecast_from_history', 'Projected from your last {n} cycles'), { n: outlook.cycles });
+    if (outlook.method === 'history') {
+        const note = fmt(tr('forecast_from_history', 'Projected from your last {n} cycles'), { n: outlook.cycles });
+        if (!bandShown(outlook)) return note;
+        return `${note}\n${tr('forecast_band_history', 'Range: from your lightest to your busiest past cycle')}`;
+    }
     if (outlook.method === 'average') return tr('forecast_from_average', 'Projected from the average pace so far');
     if (outlook.method === 'pace') {
         const note = tr('forecast_from_pace', 'Projected from the current pace');
@@ -1117,6 +1127,145 @@ function renderConsumption() {
         svg.append(hit);
     });
     root.replaceChildren(svg);
+}
+
+// ---------- This week vs the typical week ----------
+
+const TYPICAL_MARGIN = { top: 18, bottom: 30, left: 44 };
+
+// The current cycle of each provider's longest quota against its past cycles:
+// grey past weeks, their median as the typical week, and this week with its
+// forecast by the usual rhythm inside the range of the past weeks.
+function renderTypicalWeek() {
+    const weeks = [...((state.history.typical_week || {}).providers || [])];
+    weeks.sort((a, b) => providerRank(a.id) - providerRank(b.id));
+    if (!weeks.some((week) => week.id === state.typicalProvider)) state.typicalProvider = weeks.length ? weeks[0].id : null;
+    byId('typicalControl').replaceChildren(...weeks.map((week) => h('button', {
+        type: 'button',
+        'aria-pressed': week.id === state.typicalProvider ? 'true' : 'false',
+        onclick: () => {
+            state.typicalProvider = week.id;
+            writeStored('agentpulse-typical-provider', week.id);
+            safely(renderTypicalWeek, 'typicalChart');
+        },
+    }, dot(week.id), providerLabel(week.id))));
+
+    const root = byId('typicalChart');
+    const note = byId('typicalNote');
+    const week = weeks.find((entry) => entry.id === state.typicalProvider);
+    if (!week) {
+        root.replaceChildren(h('p', { class: 'muted empty', text: tr('waiting_history', 'Waiting for history data') }));
+        note.textContent = '';
+        return;
+    }
+    const predictions = (state.status.settings || {}).prediction_enabled !== false;
+    const forecast = predictions && week.forecast.likely.length > 1 ? week.forecast : null;
+    note.textContent = typicalNote(week, forecast);
+    root.replaceChildren(typicalChart(root, week, forecast, note.textContent));
+}
+
+function typicalNote(week, forecast) {
+    if (!week.past.length) return tr('typical_waiting', 'Your typical week appears once the history holds a full past week.');
+    const parts = [];
+    const typicalNow = reachedBy(week.typical, week.age);
+    if (typicalNow !== null) {
+        const values = { now: pct(week.utilization), typical: pct(typicalNow) };
+        parts.push(fmt(tr('typical_verdict', '{now} now, typically {typical} by this point of the week.'), values));
+    }
+    parts.push(tr('typical_caption', 'Grey: your previous weeks. Thick grey: the typical week, their median.'));
+    if (forecast) parts.push(tr('typical_caption_forecast', "Dashed: this week's forecast by your usual rhythm, shaded: the range of your past weeks."));
+    return parts.join(' ');
+}
+
+// The value of the last point at or before an age, or null before the first.
+function reachedBy(points, age) {
+    let reached = null;
+    for (const [pointAge, value] of points) {
+        if (pointAge > age) break;
+        reached = value;
+    }
+    return reached;
+}
+
+function typicalChart(root, week, forecast, label) {
+    const width = Math.max(300, Math.floor(root.clientWidth));
+    const narrow = width < 640;
+    const margin = { ...TYPICAL_MARGIN, right: narrow ? 12 : 128 };
+    const height = narrow ? 210 : 250;
+    const plotRight = width - margin.right;
+    const plotBottom = height - margin.bottom;
+    const period = week.period_seconds;
+    const x = (age) => margin.left + (Math.max(0, Math.min(period, age)) / period) * (plotRight - margin.left);
+    const y = (value) => margin.top + (1 - Math.max(0, Math.min(100, value)) / 100) * (plotBottom - margin.top);
+    const path = (points) => points.map(([age, value], index) => `${index ? 'L' : 'M'}${x(age).toFixed(1)},${y(value).toFixed(1)}`).join('');
+    const color = providerColor(week.id);
+    const svg = s('svg', { class: 'chart', width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': label });
+
+    for (const day of cycleDays(week)) {
+        const left = x(day.from);
+        const right = x(day.to);
+        if (day.weekend) svg.append(s('rect', { class: 'band', x: left, y: margin.top, width: right - left, height: plotBottom - margin.top }));
+        if (day.from > 0) svg.append(s('line', { class: 'grid-line', x1: left, x2: left, y1: margin.top, y2: plotBottom }));
+        if (right - left >= 28) svg.append(s('text', { class: 'tick', x: (left + right) / 2, y: height - 10, 'text-anchor': 'middle', text: day.name }));
+    }
+    for (const value of [0, 50, 100]) {
+        svg.append(s('line', { class: value === 0 ? 'axis-line' : 'grid-line', x1: margin.left, x2: plotRight, y1: y(value), y2: y(value) }));
+        svg.append(s('text', { class: 'tick', x: margin.left - 8, y: y(value) + 4, 'text-anchor': 'end', text: value === 100 ? '100%' : String(value) }));
+    }
+
+    for (const points of week.past) if (points.length > 1) svg.append(s('path', { class: 'ghost-line', d: path(points) }));
+    if (week.typical.length > 1) svg.append(s('path', { class: 'typical-line', d: path(week.typical) }));
+    if (forecast) {
+        const lower = forecast.low.slice().reverse().map(([age, value]) => `L${x(age).toFixed(1)},${y(value).toFixed(1)}`).join('');
+        svg.append(s('path', { class: 'cone', d: `${path(forecast.high)}${lower}Z`, fill: color }));
+        svg.append(s('path', { class: 'line forecast-line', d: path(forecast.likely), stroke: color }));
+    }
+    svg.append(s('line', { class: 'now-line', x1: x(week.age), x2: x(week.age), y1: margin.top, y2: plotBottom }));
+    if (week.current.length > 1) svg.append(s('path', { class: 'line current-line', d: path(week.current), stroke: color }));
+    svg.append(s('circle', { class: 'now-dot', cx: x(week.age), cy: y(week.utilization), r: 4.5, fill: color }));
+    const early = x(week.age) - margin.left < 90;
+    svg.append(s('text', {
+        class: 'point-label', x: x(week.age) + (early ? 8 : -8), y: y(week.utilization) - 9, 'text-anchor': early ? 'start' : 'end',
+        text: fmt(tr('typical_now', 'now {pct}'), { pct: pct(week.utilization) }),
+    }));
+    if (!narrow) typicalEndLabels(svg, week, forecast, y, plotRight);
+    return svg;
+}
+
+// Where this week's forecast and the typical week end at the reset, nudged apart so they never overlap.
+function typicalEndLabels(svg, week, forecast, y, plotRight) {
+    const labels = [];
+    if (forecast) {
+        const end = forecast.likely[forecast.likely.length - 1][1];
+        labels.push({ y: y(end), strong: true, text: fmt(tr('forecast_at_reset', '~{pct}% at reset'), { pct: Math.round(end) }) });
+    }
+    if (week.typical.length) {
+        const end = week.typical[week.typical.length - 1][1];
+        labels.push({ y: y(end), strong: false, text: fmt(tr('typically', 'typically {pct}'), { pct: pct(end) }) });
+    }
+    labels.sort((a, b) => a.y - b.y);
+    labels.forEach((label, index) => {
+        if (index) label.y = Math.max(label.y, labels[index - 1].y + 15);
+    });
+    for (const label of labels) {
+        svg.append(s('text', { class: label.strong ? 'end-label end-strong' : 'end-label', x: plotRight + 10, y: label.y + 4, text: label.text }));
+    }
+}
+
+// The local days of the current cycle as spans of seconds into it, named by weekday.
+function cycleDays(week) {
+    const days = [];
+    const end = week.start + week.period_seconds;
+    let from = week.start;
+    while (from < end) {
+        const date = new Date(from * 1000);
+        const next = new Date(date);
+        next.setHours(24, 0, 0, 0);
+        const to = Math.min(end, next.getTime() / 1000);
+        days.push({ from: from - week.start, to: to - week.start, name: weekdayName(date), weekend: date.getDay() === 0 || date.getDay() === 6 });
+        from = to;
+    }
+    return days;
 }
 
 function roundedTop(x, top, width, base) {

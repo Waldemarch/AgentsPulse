@@ -14,16 +14,19 @@ window, when history holds such cycles, otherwise the average pace over at
 least one full day, so a single working session is not extrapolated across
 nights and weekends.
 
-A session's forecast also carries a band: the same projection at a slow pace
+A forecast also carries a band, so a limit time comes with the range it will
+most likely fall in.  A session's band is the same projection at a slow pace
 (the lower of the last half hour and the window's average) and at a fast one
-(the quickest quarter-hour of the window), so a limit time comes with the
-range it will most likely fall in.
+(the quickest quarter-hour of the window).  A projection from past cycles spans
+the lightest and the busiest of them, and its limit time is the median of when
+they would have reached the limit from today's usage.
 """
 from __future__ import annotations
 
 import bisect
 import dataclasses
 import functools
+import math
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -91,7 +94,8 @@ class Outlook:
         forecast.
     limit_at
         Unix time at which the limit is projected to be reached, when that is
-        before the reset and the projection follows a pace; otherwise None.
+        before the reset: at the projected pace, or the median of when past
+        cycles would have reached it; otherwise None.
     reset_at
         Unix time of the reset.
     elapsed_pct
@@ -106,13 +110,14 @@ class Outlook:
         Projected utilization at the end of the user's day, when that comes
         before the reset.
     forecast_low_pct, forecast_high_pct
-        Band of the projection at the reset, at most 100: at the slow pace
-        (the lower of the last half hour and the window's average) and at
-        the fast one (the quickest quarter-hour of the window).  Only a
-        ``'pace'`` projection has a band; None otherwise.
+        Band of the projection at the reset, at most 100.  A ``'pace'``
+        projection spans the slow pace (the lower of the last half hour and
+        the window's average) and the fast one (the quickest quarter-hour of
+        the window); a ``'history'`` projection the lightest and the busiest
+        past cycle.  None for other projections.
     limit_earliest, limit_latest
-        Unix times at which the fast and the slow pace reach the limit; None
-        when that pace lasts until the reset, and without a band.
+        Unix times at which the busy and the light end of the band reach the
+        limit; None when that end lasts until the reset, and without a band.
     """
 
     status: str
@@ -135,6 +140,18 @@ class _Paces(NamedTuple):
     slow: float
     likely: float
     fast: float
+
+
+class _PastGrowth(NamedTuple):
+    """What each past cycle added after the current point of its window.
+
+    ``limit_ages`` holds, per cycle, the seconds into the window at which it
+    would have reached the limit from today's usage, or None.
+    """
+
+    to_reset: list[float]
+    to_day_end: list[float]
+    limit_ages: list[float | None]
 
 
 def usage_outlooks(
@@ -235,12 +252,12 @@ def quota_outlook(
     cycles = 0
     rate = None
     paces = None
-    growth = _typical_growth(samples, reset, period, elapsed, day_end_age, now) if multi_day else None
+    growth = _past_growth(samples, reset, period, elapsed, day_end_age, now, headroom=100.0 - utilization) if multi_day else None
     if growth is not None:
         method = 'history'
-        cycles, to_reset, to_day_end = growth
-        at_reset = utilization + to_reset
-        at_day_end = None if to_day_end is None else utilization + to_day_end
+        cycles = len(growth.to_reset)
+        at_reset = utilization + statistics.median(growth.to_reset)
+        at_day_end = utilization + statistics.median(growth.to_day_end) if growth.to_day_end else None
     else:
         if multi_day:
             method = 'average'
@@ -258,15 +275,17 @@ def quota_outlook(
     status = 'limit' if at_reset >= 100 else 'tight' if at_reset >= _TIGHT_PCT else 'ok'
     day_end_pct = None if at_day_end is None else min(100.0, at_day_end)
     outlook = Outlook(status, min(100.0, at_reset), limit_at, reset, elapsed_pct, method, cycles, day_end_pct)
-    if paces is None:
-        return outlook
-    return dataclasses.replace(
-        outlook,
-        forecast_low_pct=min(100.0, utilization + paces.slow * (reset - now)),
-        forecast_high_pct=min(100.0, utilization + paces.fast * (reset - now)),
-        limit_earliest=_limit_time(utilization, paces.fast, now, reset),
-        limit_latest=_limit_time(utilization, paces.slow, now, reset),
-    )
+    if paces is not None:
+        return dataclasses.replace(
+            outlook,
+            forecast_low_pct=min(100.0, utilization + paces.slow * (reset - now)),
+            forecast_high_pct=min(100.0, utilization + paces.fast * (reset - now)),
+            limit_earliest=_limit_time(utilization, paces.fast, now, reset),
+            limit_latest=_limit_time(utilization, paces.slow, now, reset),
+        )
+    if growth is not None:
+        return _history_band(outlook, growth, utilization, reset - period)
+    return outlook
 
 
 def worst_outlook(outlooks: Iterable[Outlook]) -> Outlook | None:
@@ -445,30 +464,33 @@ def _limit_time(utilization: float, rate: float, now: float, reset: float) -> fl
     return moment if moment <= reset else None
 
 
-def _typical_growth(
+def _past_growth(
     samples: Sequence[Sample],
     reset: float,
     period: int,
     age: float,
     day_end_age: float | None,
     now: float,
-) -> tuple[int, float, float | None] | None:
-    """Median growth that past complete cycles showed after the same point of their window.
+    *,
+    headroom: float,
+) -> _PastGrowth | None:
+    """Growth that past complete cycles showed after the same point of their window.
 
     ``age`` is how far the current window has run.  For each past cycle, the
     growth to its reset is its highest reading minus what it had reached at
     ``age``; the growth to the end of the day is what it had reached at
-    ``day_end_age`` minus the same.  Cycles without a reading at or before
-    ``age`` are skipped, because their start was not observed.
+    ``day_end_age`` minus the same; and its limit age is when it had added
+    ``headroom`` points, the room today's usage leaves.  Cycles without a
+    reading at or before ``age`` are skipped, because their start was not
+    observed.
 
     Returns
     -------
-    tuple or None
-        ``(cycles compared, growth to the reset, growth to the day's end or
-        None)``, or None without a comparable cycle.
+    _PastGrowth or None
+        One entry per compared cycle (none for the day's end without
+        ``day_end_age``), or None without a comparable cycle.
     """
-    to_reset: list[float] = []
-    to_day_end: list[float] = []
+    growth = _PastGrowth([], [], [])
     for cycle in quota_cycles(samples):
         if cycle.reset > now or abs(cycle.reset - reset) <= CYCLE_RESET_TOLERANCE:
             continue
@@ -477,13 +499,41 @@ def _typical_growth(
         if reached is None:
             continue
         final = max(sample.utilization for sample in cycle.samples)
-        to_reset.append(max(0.0, final - reached))
+        growth.to_reset.append(max(0.0, final - reached))
+        growth.limit_ages.append(_limit_age(cycle.samples, start, age, reached + headroom))
         if day_end_age is not None:
             later = _reached(cycle.samples, start, day_end_age)
-            to_day_end.append(max(0.0, (reached if later is None else later) - reached))
-    if not to_reset:
-        return None
-    return len(to_reset), statistics.median(to_reset), statistics.median(to_day_end) if to_day_end else None
+            growth.to_day_end.append(max(0.0, (reached if later is None else later) - reached))
+    return growth if growth.to_reset else None
+
+
+def _limit_age(samples: Sequence[Sample], start: float, age: float, limit: float) -> float | None:
+    """Seconds into the window of the first reading after ``age`` at or above ``limit``, or None."""
+    for sample in samples:
+        if sample.ts - start > age and sample.utilization >= limit:
+            return sample.ts - start
+    return None
+
+
+def _history_band(outlook: Outlook, growth: _PastGrowth, utilization: float, start: float) -> Outlook:
+    """Add the band of past cycles to a projection from them.
+
+    The band spans the lightest and the busiest cycle's growth.  The limit
+    time is the median of when the cycles would have reached the limit, a
+    cycle that would not have counting as after the reset; the band's ends
+    are the first and the last of those times.
+    """
+    reached = sorted(age for age in growth.limit_ages if age is not None)
+    ordered = reached + [math.inf] * (len(growth.limit_ages) - len(reached))
+    likely = statistics.median(ordered)
+    return dataclasses.replace(
+        outlook,
+        limit_at=start + likely if outlook.status == 'limit' and math.isfinite(likely) else None,
+        forecast_low_pct=min(100.0, utilization + min(growth.to_reset)),
+        forecast_high_pct=min(100.0, utilization + max(growth.to_reset)),
+        limit_earliest=start + reached[0] if reached else None,
+        limit_latest=start + reached[-1] if len(reached) == len(ordered) else None,
+    )
 
 
 def _reached(samples: Sequence[Sample], start: float, age: float) -> float | None:

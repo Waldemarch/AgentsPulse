@@ -503,6 +503,23 @@ class TestUsageStatisticsPayload(unittest.TestCase):
         self.assertEqual(cells[2][10], 8.0)
         self.assertEqual(cells[2][11], 5.0)
 
+    def test_typical_week_follows_the_longest_base_window(self):
+        weeks = _history_payload(self._history(), '24h', now=self.NOW, tz=self.TZ)['typical_week']['providers']
+
+        self.assertEqual([(week['id'], week['field']) for week in weeks], [('claude', 'seven_day')])
+        week = weeks[0]
+        self.assertEqual(week['utilization'], 25.0)
+        self.assertEqual(week['start'], datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc).timestamp())
+        self.assertEqual(week['past'], [])
+
+    def test_typical_week_is_the_same_for_every_range(self):
+        history = self._history()
+
+        weeks = [_history_payload(history, name, now=self.NOW, tz=self.TZ)['typical_week'] for name in ('24h', '7d', '30d')]
+
+        self.assertEqual(weeks[0], weeks[1])
+        self.assertEqual(weeks[0], weeks[2])
+
     def test_providers_without_readings_are_left_out(self):
         history = DashboardHistory()
         history.record('codex', {'error': 'failed'}, ts=self.NOW - 60)
@@ -511,6 +528,7 @@ class TestUsageStatisticsPayload(unittest.TestCase):
 
         self.assertEqual(payload['consumption']['providers'], [])
         self.assertEqual(payload['heatmap']['providers'], [])
+        self.assertEqual(payload['typical_week']['providers'], [])
         self.assertEqual(len(payload['consumption']['starts']), 7)
 
 

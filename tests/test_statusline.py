@@ -83,6 +83,16 @@ class TestFormatStatusline(unittest.TestCase):
         status = T['status_limit_band'].format(clock=format_clock(limit_at, now=NOW), earliest=_clock(NOW + 40 * 60), latest=_clock(NOW + 90 * 60))
         self.assertEqual(text, f'Claude 5h 72% ↺{_clock(self.session_reset)} {status}')
 
+    def test_weekly_limit_names_its_time_without_the_band(self):
+        limit_at = NOW + DAY
+        outlook = dataclasses.replace(
+            _outlook('limit', self.week_reset, limit_at=limit_at), method='history', limit_earliest=NOW + 20 * HOUR, limit_latest=NOW + 2 * DAY,
+        )
+
+        text = format_statusline([('claude', _usage(seven_day=76.0))], {'claude': {'seven_day': outlook}}, fields=FIELDS, now=NOW, color=False)
+
+        self.assertEqual(text, f"Claude 7d 76% {T['status_limit_at'].format(clock=format_clock(limit_at, now=NOW))}")
+
     def test_weekly_limit_without_a_time_names_the_limit(self):
         outlooks = {'claude': {'seven_day': _outlook('limit', self.week_reset)}}
 

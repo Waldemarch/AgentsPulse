@@ -505,6 +505,17 @@ class TestFormatOutlook(unittest.TestCase):
 
         self.assertEqual(limit_band(outlook), ('15:20', '17:05'))
 
+    def test_a_band_from_past_cycles_names_the_day(self):
+        """A weekly band spans days, so each end names its day like the limit time."""
+        outlook = Outlook(
+            'limit', 100.0, datetime(2026, 1, 16, 14, 0).timestamp(), datetime(2026, 1, 18, 12, 0).timestamp(), 50.0, 'history', 3,
+            forecast_low_pct=80.0, forecast_high_pct=100.0,
+            limit_earliest=datetime(2026, 1, 15, 9, 0).timestamp(), limit_latest=datetime(2026, 1, 17, 16, 0).timestamp(),
+        )
+
+        self.assertEqual(format_outlook(outlook, now=self.NOW, band=True), 'Limit ~Fri 14:00 (tomorrow 09:00-Sat 16:00)')
+        self.assertEqual(limit_band(outlook, now=self.NOW), ('tomorrow 09:00', 'Sat 16:00'))
+
     def test_no_limit_band_without_an_earliest_limit(self):
         self.assertIsNone(limit_band(_outlook('limit', datetime(2026, 1, 14, 15, 47).timestamp())))
 
