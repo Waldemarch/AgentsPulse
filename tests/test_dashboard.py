@@ -520,6 +520,16 @@ class TestUsageStatisticsPayload(unittest.TestCase):
         self.assertEqual(weeks[0], weeks[1])
         self.assertEqual(weeks[0], weeks[2])
 
+    def test_session_timeline_follows_the_session_window(self):
+        sessions = _history_payload(self._history(), '24h', now=self.NOW, tz=self.TZ, workdays=(0, 1, 2, 3, 4))['sessions']
+
+        self.assertEqual(sessions['days'], 7)
+        self.assertEqual(sessions['from'], datetime(2026, 1, 8, tzinfo=timezone.utc).timestamp())
+        claude = sessions['providers'][0]
+        self.assertEqual((claude['id'], claude['field']), ('claude', 'five_hour'))
+        self.assertEqual([window['peak'] for window in claude['windows']], [40.0])
+        self.assertEqual(claude['blocked'], {'count': 0, 'seconds': 0.0})
+
     def test_providers_without_readings_are_left_out(self):
         history = DashboardHistory()
         history.record('codex', {'error': 'failed'}, ts=self.NOW - 60)
@@ -529,6 +539,7 @@ class TestUsageStatisticsPayload(unittest.TestCase):
         self.assertEqual(payload['consumption']['providers'], [])
         self.assertEqual(payload['heatmap']['providers'], [])
         self.assertEqual(payload['typical_week']['providers'], [])
+        self.assertEqual(payload['sessions']['providers'], [])
         self.assertEqual(len(payload['consumption']['starts']), 7)
 
 

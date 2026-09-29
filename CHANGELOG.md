@@ -22,6 +22,7 @@
 - **While you were away** - after locking the workstation or leaving it idle for at least 15 minutes, you get one notification that sums up which quotas reset and how much each provider used in the meantime, instead of the separate alerts held back during your absence.
 - **Daily budget** - the popup and the dashboard show how much of each weekly quota you can use today and still have it last until the reset: what is left, spread over today and your remaining workdays (`budget_workdays`, Monday to Friday by default).
 - **This week vs your typical week** - the dashboard draws the current week against your previous weeks and their median, with the forecast that follows your usual rhythm and the range of your past weeks, so a heavier week than usual stands out at a glance.
+- **Sessions and time at the limit** - the dashboard shows your session windows of the last week and how often, and for how long, the session limit left you without quota in the last 30 days, with a planner that names when a first message would move your first session's reset to about when you usually run out.
 
 ### Changed
 
