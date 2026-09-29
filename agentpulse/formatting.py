@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 __all__ = [
     'PERIOD_5H', 'PERIOD_7D',
     'countdown_label', 'elapsed_pct', 'expand_popup_fields', 'field_period', 'field_sort_key',
-    'format_clock', 'format_credits', 'format_outlook', 'format_tooltip',
+    'format_clock', 'format_credits', 'format_duration', 'format_outlook', 'format_tooltip',
     'midnight_positions', 'parse_field_name', 'period_to_field_name', 'popup_label',
     'time_until', 'tooltip_label',
 ]
@@ -200,6 +200,17 @@ def countdown_label(seconds: float) -> str:
     if hours < 24:
         return T['icon_hours'].format(h=hours)
     return T['icon_days'].format(d=int(seconds // 86400))
+
+
+def format_duration(seconds: float) -> str:
+    """Return a short duration: minutes below an hour (``'45m'``), hours below two days (``'5h 30m'``), then days (``'3d 4h'``)."""
+    minutes = max(1, round(seconds / 60))
+    if minutes < 60:
+        return T['duration_m'].format(m=minutes)
+    hours = minutes // 60
+    if hours >= 48:
+        return T['duration_dh'].format(d=hours // 24, h=hours % 24)
+    return T['duration_hm'].format(h=hours, m=minutes % 60)
 
 
 def format_clock(ts: float, *, now: float | None = None) -> str:

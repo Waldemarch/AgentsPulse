@@ -13,7 +13,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from agentpulse.app import AgentPulse, _is_quiet_time
+from agentpulse.app import AgentPulse, _Absence, _is_quiet_time
 from agentpulse.cache import UpdateResult
 from agentpulse.claude_cli import RefreshResult
 from agentpulse.dashboard import DashboardHistory
@@ -1557,6 +1557,175 @@ class TestStatusline(unittest.TestCase):
             self.app._on_icon_ready(MagicMock())
 
         self.assertEqual(order, ['serve', 'poll'])
+
+
+class TestAwaySummary(unittest.TestCase):
+    """Tests for the one summary shown when the user comes back after an absence."""
+
+    def setUp(self):
+        self.app = _make_app()
+        self.now = time.time()
+        self.app._deferred_notifications = {}
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _usage(self, pct: float, hours: float = 3, field: str = 'five_hour') -> dict:
+        reset = datetime.fromtimestamp(self.now + hours * 3600, tz=timezone.utc).isoformat()
+        return {field: {'utilization': pct, 'resets_at': reset}}
+
+    def _absence(self, minutes: float, before: dict, held_back: dict | None = None) -> _Absence:
+        return _Absence(time.monotonic() - minutes * 60, {'claude': before}, dict(held_back or {}))
+
+    def _shown(self) -> list:
+        return [call.args for call in self.app.icon.notify.call_args_list]
+
+    def test_leaving_remembers_the_readings_once(self):
+        self.app._last_response = self._usage(20.0)
+
+        self.app._begin_absence()
+        first = self.app._absence
+        self.app._last_response = self._usage(90.0)
+        self.app._begin_absence()
+
+        self.assertIs(self.app._absence, first)
+        self.assertEqual(first.readings['claude'], self._usage(20.0))
+
+    def test_leaving_counts_from_the_last_input(self):
+        with patch('agentpulse.app.get_idle_seconds', return_value=300.0):
+            self.app._begin_absence()
+
+        self.assertAlmostEqual(time.monotonic() - self.app._absence.since, 300.0, delta=5)
+
+    @patch('agentpulse.settings.AWAY_SUMMARY_ENABLED', False)
+    def test_turned_off_it_remembers_nothing(self):
+        self.app._begin_absence()
+
+        self.assertIsNone(self.app._absence)
+
+    def test_waiting_for_the_user_opens_an_absence(self):
+        with patch.object(self.app, '_is_user_away', side_effect=[True, False]), patch('agentpulse.app.time.sleep'):
+            self.app._wait_for_activity()
+
+        self.assertIsNotNone(self.app._absence)
+
+    def test_no_absence_while_the_user_is_present(self):
+        with patch.object(self.app, '_is_user_away', return_value=False):
+            self.app._wait_for_activity()
+
+        self.assertIsNone(self.app._absence)
+
+    def test_alerts_wait_for_the_summary_while_an_absence_is_open(self):
+        self.app._absence = self._absence(20, self._usage(20.0))
+
+        self.app._notify_or_defer('threshold_five_hour', 'at 80%', 'Usage Notice')
+
+        self.app.icon.notify.assert_not_called()
+        self.assertIn('threshold_five_hour', self.app._deferred_notifications)
+
+    def test_one_summary_replaces_the_quota_alerts(self):
+        self.app._absence = self._absence(20, self._usage(20.0))
+        self.app._last_response = self._usage(85.0)
+        self.app._deferred_notifications = {
+            'threshold_five_hour': ('at 80%', 'Usage Notice'),
+            'reset': ('reset', 'Quota Reset'),
+            'account_switched': ('switched', 'Account'),
+            'threshold_extra_usage': ('extra 50%', 'Extra'),
+        }
+
+        self.app._welcome_back()
+
+        shown = self._shown()
+        self.assertEqual([title for _message, title in shown[:2]], ['Account', 'Extra'])
+        message, title = shown[2]
+        self.assertIn('Claude', message)
+        self.assertIn('85', message)
+        self.assertTrue(title.startswith(T['away_title'].split('{')[0]))
+        self.assertEqual(len(shown), 3)
+        self.assertEqual(self.app._deferred_notifications, {})
+        self.assertIsNone(self.app._absence)
+
+    def test_alert_that_was_waiting_before_the_absence_is_kept(self):
+        waiting = {'threshold_seven_day_opus': ('opus at 80%', 'Usage Notice')}
+        self.app._absence = self._absence(20, self._usage(20.0), held_back=waiting)
+        self.app._last_response = self._usage(85.0)
+        self.app._deferred_notifications = {**waiting, 'threshold_five_hour': ('at 80%', 'Usage Notice')}
+
+        self.app._welcome_back()
+
+        messages = [message for message, _title in self._shown()]
+        self.assertIn('opus at 80%', messages)
+        self.assertNotIn('at 80%', messages)
+        self.assertEqual(len(messages), 2)
+
+    def test_short_absence_shows_the_alerts_one_by_one(self):
+        self.app._absence = self._absence(5, self._usage(20.0))
+        self.app._last_response = self._usage(85.0)
+        self.app._deferred_notifications = {'threshold_five_hour': ('at 80%', 'Usage Notice')}
+
+        self.app._welcome_back()
+
+        self.assertEqual(self._shown(), [('at 80%', 'Usage Notice')])
+
+    def test_nothing_changed_shows_no_summary(self):
+        self.app._absence = self._absence(60, self._usage(20.0))
+        self.app._last_response = self._usage(20.0)
+
+        self.app._welcome_back()
+
+        self.app.icon.notify.assert_not_called()
+        self.assertIsNone(self.app._absence)
+
+    def test_secondary_providers_are_summed_up_too(self):
+        self.app.codex_cache = MagicMock()
+        self.app._absence = _Absence(time.monotonic() - 20 * 60, {'claude': self._usage(20.0), 'codex': self._usage(5.0)}, {})
+        self.app._last_response = self._usage(20.0)
+        self.app._secondary_responses = {'codex': self._usage(45.0)}
+
+        self.app._welcome_back()
+
+        message, _title = self._shown()[0]
+        self.assertTrue(message.startswith('Codex'))
+
+    def test_summary_waits_for_the_end_of_quiet_hours(self):
+        self.app._absence = self._absence(20, self._usage(20.0))
+        self.app._last_response = self._usage(85.0)
+
+        with patch('agentpulse.app._is_quiet_time', return_value=True):
+            self.app._welcome_back()
+
+        self.app.icon.notify.assert_not_called()
+        self.assertIn('away_summary', self.app._deferred_notifications)
+        self.app._welcome_back()
+        self.assertEqual(len(self._shown()), 1)
+
+    @patch('agentpulse.settings.ON_RESET_COMMAND', [])
+    @patch('agentpulse.app.time.sleep')
+    @patch('agentpulse.app.time.time')
+    def test_coming_back_reads_usage_before_the_summary(self, mock_time, _sleep):
+        events = []
+        self.app.cache = MagicMock()
+        self.app.cache.last_success_time = 0.0
+        for name, _cache in self.app.secondary_providers():
+            setattr(self.app, f'{name}_cache', MagicMock())
+
+        def update():
+            events.append('update')
+            if len(events) >= 2:
+                self.app.running = False
+
+        def leave_and_come_back(until=None):
+            self.app._absence = self._absence(20, self._usage(20.0))
+
+        mock_time.side_effect = [100.0, 100.0, 200.0]
+        with patch.object(self.app, 'update', side_effect=update), \
+             patch.object(self.app, '_calculate_poll_interval', return_value=180), \
+             patch.object(self.app, '_is_user_away', side_effect=[True, False]), \
+             patch.object(self.app, '_wait_for_activity', side_effect=leave_and_come_back), \
+             patch.object(self.app, '_welcome_back', side_effect=lambda: events.append('welcome')):
+            self.app.poll_loop()
+
+        self.assertEqual(events, ['update', 'update', 'welcome'])
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@
 - While every provider is at its limit, the tray icon counts down to the reset, then shows a green check mark for ten minutes once you can work again.
 - The popup has **Dashboard** and **Refresh** buttons and marks every provider with its own color.
 - **Claude Code status line** - turn it on in the dashboard settings and paste the entry shown there into `~/.claude/settings.json` to see every provider's session and weekly usage, the session reset time, and a colored warning for tight quotas or limits right below the Claude Code prompt.
+- **While you were away** - after locking the workstation or leaving it idle for at least 15 minutes, you get one notification that sums up which quotas reset and how much each provider used in the meantime, instead of the separate alerts held back during your absence.
 
 ### Changed
 

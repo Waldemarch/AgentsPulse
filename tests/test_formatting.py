@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from agentpulse.formatting import (
     PERIOD_5H, PERIOD_7D,
-    countdown_label, elapsed_pct, expand_popup_fields, field_period, format_credits, format_outlook, format_tooltip,
+    countdown_label, elapsed_pct, expand_popup_fields, field_period, format_credits, format_duration, format_outlook, format_tooltip,
     period_to_field_name,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
@@ -472,6 +472,30 @@ class TestCountdownLabel(unittest.TestCase):
     def test_days_from_a_day_on(self):
         self.assertEqual(countdown_label(24 * 3600), '1d')
         self.assertEqual(countdown_label(2.9 * 24 * 3600), '2d')
+
+
+class TestFormatDuration(unittest.TestCase):
+    """Tests for format_duration() - how long an absence lasted."""
+
+    def test_minutes_below_an_hour(self):
+        self.assertEqual(format_duration(45 * 60), '45m')
+        self.assertEqual(format_duration(59 * 60 + 20), '59m')
+
+    def test_under_a_minute_shows_one_minute(self):
+        self.assertEqual(format_duration(0), '1m')
+        self.assertEqual(format_duration(20), '1m')
+
+    def test_rounds_to_the_nearest_minute(self):
+        self.assertEqual(format_duration(59 * 60 + 40), '1h 0m')
+
+    def test_hours_and_minutes_below_two_days(self):
+        self.assertEqual(format_duration(60 * 60), '1h 0m')
+        self.assertEqual(format_duration(95 * 60), '1h 35m')
+        self.assertEqual(format_duration(47 * 3600 + 59 * 60), '47h 59m')
+
+    def test_days_and_hours_from_two_days_on(self):
+        self.assertEqual(format_duration(48 * 3600), '2d 0h')
+        self.assertEqual(format_duration(3 * 86400 + 4 * 3600 + 10 * 60), '3d 4h')
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,22 @@ Threshold lookup uses a fallback chain: exact match (e.g. `alert_thresholds_seve
 }
 ```
 
+## While you were away
+
+When you lock the workstation or leave it idle for `idle_pause` seconds, the app holds back its desktop notifications. Come back after at least 15 minutes, and it reads every provider's usage right away and shows one notification that sums up your absence instead of the reset and threshold alerts held back meanwhile:
+
+```text
+While you were away (1h 35m)
+Claude: 5h available again since 12:30, now 12%, 7d 88% → 90%
+Codex: 5h 10% → 35%
+```
+
+Each line names the quotas of one provider that reset while you were away (with the time they reset) or grew by at least one percentage point, sessions first. Providers without changes are left out, and without any change there is no notification. After a shorter absence, the held-back alerts are shown one by one as before. Notifications that are not about a quota window, such as an account switch or an extra-usage alert, still appear on their own, and so do alerts that were already waiting for quiet hours to end before you left. During quiet hours, the summary waits like every other notification.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `away_summary_enabled` | `true` | Sum up what happened while you were away in one notification when you come back. Also available in the dashboard's settings panel |
+
 ## Tooltip fields
 
 The tray tooltip shows a quick usage summary when you hover over the icon. By default, it displays the session (5h) and weekly (7d) quotas. Use `tooltip_fields` to choose which usage fields appear in the tooltip and in the [Claude Code status line](#claude-code-status-line).
@@ -153,7 +169,7 @@ Use **Open Dashboard** from the tray context menu or the popup's **Dashboard** b
 
 Usage history is persisted to `agentpulse-history.jsonl` next to the executable (only quota percentages, reset timestamps, and error messages - never tokens, emails, or account identifiers), so charts and the heatmap survive application restarts. Set `history_persist` to `false` to keep history in memory only; the file can be deleted at any time.
 
-The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, predictions, heatmap, the Claude Code status line, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
+The dashboard is intentionally not exposed on the network, and requests are validated beyond the localhost bind: the `Host` header must be a loopback host (blocks DNS rebinding), and every POST endpoint requires a random per-run session token plus a same-origin `Origin` header (blocks cross-site request forgery from web pages). The token is embedded in the URL when the dashboard is opened from the tray menu; if a saved bookmark stops accepting settings changes, reopen the dashboard from the tray menu. The **Settings** panel (the **Settings** button in the header) can save a small allowlisted subset of configuration keys to `agentpulse-settings.json`: Codex and Kimi enablement, the tray icon style, tooltip fields, alert thresholds, the away summary, predictions, heatmap, the Claude Code status line, quiet hours, and event commands (one command per line, saved as an array - each command runs on its own). It does not expose or write OAuth tokens, and it never shows the settings file's path.
 
 History settings:
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
-    'ALERT_TIME_AWARE', 'ALERT_TIME_AWARE_BELOW',
+    'ALERT_TIME_AWARE', 'ALERT_TIME_AWARE_BELOW', 'AWAY_SUMMARY_ENABLED',
     'BAR_BG', 'BAR_DIVIDER', 'BAR_FG', 'BAR_FG_TIGHT', 'BAR_FG_WARN', 'BAR_MARKER', 'BG',
     'CODEX_ENABLED', 'CURRENCY_SYMBOL',
     'DASHBOARD_HOST', 'DASHBOARD_PORT',
@@ -50,7 +50,7 @@ _MIN_INTS = {
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_tight', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
 _BOOLEANS = {
     'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled',
-    'show_install_section', 'statusline_enabled',
+    'show_install_section', 'statusline_enabled', 'away_summary_enabled',
 }
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
@@ -66,7 +66,7 @@ _DASHBOARD_KEYS = {
     'on_reset_command', 'on_threshold_command',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
-    'show_install_section', 'email_display', 'icon_style', 'statusline_enabled',
+    'show_install_section', 'email_display', 'icon_style', 'statusline_enabled', 'away_summary_enabled',
 }
 
 
@@ -297,7 +297,9 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 accepted[key] = value
             else:
                 errors.append(f'{key}: invalid value')
-        elif key in {'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'statusline_enabled'}:
+        elif key in {
+            'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'statusline_enabled', 'away_summary_enabled',
+        }:
             if isinstance(value, bool):
                 accepted[key] = value
             else:
@@ -354,6 +356,7 @@ def dashboard_settings() -> dict[str, object]:
         'quiet_hours_end': QUIET_HOURS_END,
         'icon_style': ICON_STYLE,
         'statusline_enabled': STATUSLINE_ENABLED,
+        'away_summary_enabled': AWAY_SUMMARY_ENABLED,
     }
 
 
@@ -396,6 +399,7 @@ PREDICTION_ENABLED = _S.get('prediction_enabled', True)
 PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
 HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
 STATUSLINE_ENABLED = _S.get('statusline_enabled', False)
+AWAY_SUMMARY_ENABLED = _S.get('away_summary_enabled', True)
 QUIET_HOURS_ENABLED = _S.get('quiet_hours_enabled', False)
 QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
 QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
@@ -481,7 +485,7 @@ def reload() -> None:
     modules that cache them locally).
     """
     global _S
-    global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END
+    global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END, AWAY_SUMMARY_ENABLED
     global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
     global HEATMAP_ENABLED, STATUSLINE_ENABLED, CODEX_ENABLED, KIMI_ENABLED
@@ -494,6 +498,7 @@ def reload() -> None:
     QUIET_HOURS_ENABLED = _S.get('quiet_hours_enabled', False)
     QUIET_HOURS_START = _S.get('quiet_hours_start', '22:00')
     QUIET_HOURS_END = _S.get('quiet_hours_end', '08:00')
+    AWAY_SUMMARY_ENABLED = _S.get('away_summary_enabled', True)
     ON_RESET_COMMAND = _S.get('on_reset_command', [])
     ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
     PREDICTION_ENABLED = _S.get('prediction_enabled', True)

@@ -609,7 +609,7 @@ def _dashboard_i18n() -> dict[str, str]:
         'drawer_note', 'group_alerts', 'group_automation', 'group_tray', 'group_forecasts',
         'group_statusline', 'statusline_enabled', 'statusline_hint', 'copy', 'copied',
         'icon_style', 'icon_bars', 'icon_rings', 'icon_number', 'restart_note',
-        'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'tooltip_fields', 'predictions',
+        'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'away_summary', 'tooltip_fields', 'predictions',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
         'thr_kimi_5h', 'thr_kimi_7d',
         'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command',

@@ -1201,6 +1201,67 @@ class TestStatuslineSettings(unittest.TestCase):
                     settings_mod.save_dashboard_settings({'statusline_enabled': original})
 
 
+class TestAwaySummarySettings(unittest.TestCase):
+    """Tests for the away_summary_enabled setting (one summary after an absence)."""
+
+    def _run_validate(self, data: dict) -> tuple[dict, MagicMock]:
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate(dict(data), Path('/fake/settings.json'))
+        return result, mock_ctypes
+
+    def test_on_without_a_settings_file(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.reload()
+                    self.assertTrue(settings_mod.AWAY_SUMMARY_ENABLED)
+            finally:
+                # Back to the values of the real settings files.
+                settings_mod.reload()
+
+    def test_file_accepts_true_and_false(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                result, mock = self._run_validate({'away_summary_enabled': value})
+                self.assertIs(result['away_summary_enabled'], value)
+                mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_file_drops_a_non_boolean_with_a_message(self):
+        result, mock = self._run_validate({'away_summary_enabled': 'no'})
+
+        self.assertNotIn('away_summary_enabled', result)
+        mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_dashboard_can_turn_it_off(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'away_summary_enabled': False})
+
+        self.assertEqual((accepted, errors), ({'away_summary_enabled': False}, []))
+
+    def test_dashboard_rejects_a_non_boolean(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'away_summary_enabled': 0})
+
+        self.assertEqual(accepted, {})
+        self.assertTrue(errors)
+
+    def test_dashboard_settings_expose_it(self):
+        self.assertIsInstance(settings_mod.dashboard_settings()['away_summary_enabled'], bool)
+
+    def test_saved_value_applies_without_a_restart(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    ok, _errors, _path = settings_mod.save_dashboard_settings({'away_summary_enabled': False})
+                    self.assertTrue(ok)
+                    self.assertFalse(settings_mod.AWAY_SUMMARY_ENABLED)
+            finally:
+                settings_mod.reload()
+
+
 class TestPopupColorSettings(unittest.TestCase):
     """Tests for the tight bar colour and the provider colours."""
 

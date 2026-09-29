@@ -1229,6 +1229,7 @@ async function loadSettings() {
     byId('predictionEnabled').checked = settings.prediction_enabled !== false;
     byId('predictionDayEnd').value = settings.prediction_day_end_time || '18:00';
     byId('heatmapEnabled').checked = settings.heatmap_enabled !== false;
+    byId('awaySummaryEnabled').checked = settings.away_summary_enabled !== false;
     byId('quietHoursEnabled').checked = !!settings.quiet_hours_enabled;
     byId('quietHoursStart').value = settings.quiet_hours_start || '22:00';
     byId('quietHoursEnd').value = settings.quiet_hours_end || '08:00';
@@ -1269,6 +1270,7 @@ async function saveSettings(event) {
         prediction_enabled: byId('predictionEnabled').checked,
         prediction_day_end_time: byId('predictionDayEnd').value || '18:00',
         heatmap_enabled: byId('heatmapEnabled').checked,
+        away_summary_enabled: byId('awaySummaryEnabled').checked,
         quiet_hours_enabled: byId('quietHoursEnabled').checked,
         quiet_hours_start: byId('quietHoursStart').value || '22:00',
         quiet_hours_end: byId('quietHoursEnd').value || '08:00',
