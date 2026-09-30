@@ -578,6 +578,61 @@ main {
 
 .chart .bar-hover { fill: var(--chart-band); }
 
+/* Sessions and time at the limit. */
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+}
+
+.stat-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-2);
+    font-size: 12.5px;
+}
+
+.stat strong {
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+}
+
+.stat small {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+.stat-blocked strong { color: var(--critical-ink); }
+.chart .session-blocked { fill: var(--critical); opacity: 0.85; }
+.chart .tick.today { fill: var(--text); font-weight: 650; }
+
+.planner {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.planner-note {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0;
+    color: var(--text-2);
+    font-size: 13px;
+}
+
 /* This week against the typical week. */
 .chart .ghost-line {
     fill: none;

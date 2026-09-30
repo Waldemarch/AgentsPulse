@@ -272,6 +272,7 @@ function renderCharts() {
     safely(renderLegend, 'historyLegend');
     safely(renderHistory, 'historyChart');
     safely(renderTypicalWeek, 'typicalChart');
+    safely(renderSessions, 'sessionsChart');
     safely(renderConsumption, 'consumptionChart');
     if (byId('historyTable').open) safely(renderHistoryTable, 'historyTableBody');
 }
@@ -704,7 +705,7 @@ function timeTicks(from, to, plotWidth) {
 }
 
 // Background bands: nights on a day's chart, weekends on longer ones.
-function bands(from, to) {
+function bands(from, to, nights = to - from <= 36 * HOUR) {
     const result = [];
     const day = new Date(from * 1000);
     day.setHours(0, 0, 0, 0);
@@ -712,7 +713,7 @@ function bands(from, to) {
         const start = day.getTime() / 1000;
         const next = new Date(day);
         next.setDate(next.getDate() + 1);
-        if (to - from <= 36 * HOUR) {
+        if (nights) {
             const morning = new Date(day);
             morning.setHours(6, 0, 0, 0);
             result.push([start, morning.getTime() / 1000]);
@@ -1250,6 +1251,142 @@ function typicalEndLabels(svg, week, forecast, y, plotRight) {
     for (const label of labels) {
         svg.append(s('text', { class: label.strong ? 'end-label end-strong' : 'end-label', x: plotRight + 10, y: label.y + 4, text: label.text }));
     }
+}
+
+// ---------- Sessions and time at the limit ----------
+
+const SESSION_LANE = 34;
+
+// Every provider's session windows of the last week as bars, their time at the
+// limit in red, a tile per provider with its blocks of the last 30 days, and
+// the planner's advice for the first session of a workday.
+function renderSessions() {
+    const sessions = state.history.sessions || { days: 7, from: 0, providers: [] };
+    const list = [...sessions.providers];
+    list.sort((a, b) => providerRank(a.id) - providerRank(b.id));
+    const chart = byId('sessionsChart');
+    if (!list.length) {
+        byId('sessionStats').replaceChildren();
+        byId('sessionPlanner').replaceChildren();
+        chart.replaceChildren(h('p', { class: 'muted empty', text: tr('waiting_history', 'Waiting for history data') }));
+        return;
+    }
+    byId('sessionStats').replaceChildren(...list.map(sessionStat));
+    chart.replaceChildren(sessionsChart(chart, sessions, list));
+    byId('sessionPlanner').replaceChildren(...list.map(plannerNote).filter(Boolean));
+}
+
+function sessionStat(provider) {
+    const period = fmt(tr('blocks_period', '{provider} · last 30 days'), { provider: providerLabel(provider.id) });
+    const label = h('span', { class: 'stat-label' }, dot(provider.id), period);
+    if (!provider.blocked.count) {
+        return h('div', { class: 'stat' }, label,
+            h('strong', { text: tr('blocks_none', 'Never at the limit') }),
+            h('small', { text: tr('blocks_none_detail', 'The session limit never ran out') }));
+    }
+    const detail = { duration: durationText(provider.blocked.seconds), week: provider.blocked_week.count };
+    return h('div', { class: 'stat stat-blocked' }, label,
+        h('strong', { text: fmt(tr('blocks_count', '{n}× at the limit'), { n: provider.blocked.count }) }),
+        h('small', { text: fmt(tr('blocks_detail', '{duration} without quota · {week}× in the last 7 days'), detail) }));
+}
+
+function sessionsChart(root, sessions, list) {
+    const width = Math.max(300, Math.floor(root.clientWidth));
+    const narrow = width < 640;
+    const margin = { top: 6, right: 10, bottom: 28, left: narrow ? 52 : 64 };
+    const lanes = list.length * SESSION_LANE;
+    const height = margin.top + lanes + margin.bottom;
+    const from = sessions.from;
+    const to = from + sessions.days * DAY;
+    const now = state.status.now || Date.now() / 1000;
+    const plotRight = width - margin.right;
+    const x = (ts) => margin.left + ((Math.max(from, Math.min(to, ts)) - from) / (to - from)) * (plotRight - margin.left);
+    const svg = s('svg', {
+        class: 'chart', width, height, viewBox: `0 0 ${width} ${height}`, role: 'img',
+        'aria-label': tr('sessions_label', 'Session windows of the last 7 days and the time at the limit'),
+    });
+
+    for (const [a, b] of bands(from, to, true)) svg.append(s('rect', { class: 'band', x: x(a), y: margin.top, width: x(b) - x(a), height: lanes }));
+    const day = new Date(from * 1000);
+    while (day.getTime() / 1000 < to) {
+        const start = day.getTime() / 1000;
+        const next = new Date(day);
+        next.setDate(next.getDate() + 1);
+        if (start > from) svg.append(s('line', { class: 'grid-line', x1: x(start), x2: x(start), y1: margin.top, y2: margin.top + lanes }));
+        const end = next.getTime() / 1000;
+        const text = narrow ? weekdayName(day) : `${weekdayName(day)} ${day.getDate()}`;
+        const tickClass = start <= now && now < end ? 'tick today' : 'tick';
+        svg.append(s('text', { class: tickClass, x: (x(start) + x(end)) / 2, y: height - 9, 'text-anchor': 'middle', text }));
+        day.setDate(day.getDate() + 1);
+    }
+
+    list.forEach((provider, index) => {
+        const top = margin.top + index * SESSION_LANE;
+        svg.append(s('text', { class: 'tick', x: margin.left - 8, y: top + SESSION_LANE / 2 + 4, 'text-anchor': 'end', text: providerLabel(provider.id) }));
+        for (const window of provider.windows) {
+            const left = x(window.start);
+            const right = x(Math.min(now, window.end));
+            if (right <= left) continue;
+            svg.append(s('rect', {
+                x: left, y: top + 8, width: Math.max(1.5, right - left), height: SESSION_LANE - 16, rx: 3,
+                fill: providerColor(provider.id), 'fill-opacity': (0.25 + 0.6 * Math.min(100, window.peak) / 100).toFixed(2),
+            }));
+            if (window.blocked_at) {
+                const blocked = x(window.blocked_at);
+                const span = Math.max(1.5, right - blocked);
+                svg.append(s('rect', { class: 'session-blocked', x: blocked, y: top + 8, width: span, height: SESSION_LANE - 16, rx: 2 }));
+            }
+            const hit = s('rect', { class: 'hit', x: left - 2, y: top + 4, width: Math.max(6, right - left + 4), height: SESSION_LANE - 8 });
+            const content = sessionTip(provider, window);
+            hit.addEventListener('pointermove', (event) => showTip(content, event.clientX, event.clientY));
+            hit.addEventListener('pointerleave', hideTip);
+            svg.append(hit);
+        }
+    });
+    if (now > from && now < to) svg.append(s('line', { class: 'cross-line', x1: x(now), x2: x(now), y1: margin.top - 2, y2: margin.top + lanes }));
+    return svg;
+}
+
+function sessionTip(provider, window) {
+    const date = new Date(window.start * 1000);
+    const rows = [
+        h('div', { class: 'tip-head', text: `${providerLabel(provider.id)} · ${weekdayName(date)} ${date.getDate()}` }),
+        h('div', { text: fmt(tr('session_tip', '{start}-{end} · peak {pct}'), {
+            start: clock(window.start), end: clock(window.end), pct: pct(window.peak),
+        }) }),
+    ];
+    if (window.blocked_at) {
+        rows.push(h('div', { text: fmt(tr('session_blocked_tip', 'at the limit {from}-{to}'), { from: clock(window.blocked_at), to: clock(window.end) }) }));
+    }
+    return rows;
+}
+
+// Advice for a provider that reached its session limit: when its first
+// session of a workday usually starts and resets, how often and how early it
+// runs out, and the earlier start that would bring the reset to that point.
+function plannerNote(provider) {
+    const plan = provider.planner;
+    if (!plan || !provider.blocked.count) return null;
+    const parts = [fmt(tr('planner_start', 'Your first {provider} session on workdays usually starts around {start} and resets around {reset}.'), {
+        provider: providerLabel(provider.id), start: dayClock(plan.start), reset: dayClock(plan.reset),
+    })];
+    if (plan.blocked) {
+        parts.push(fmt(tr('planner_blocked', 'It ran out on {blocked} of the last {days} workdays, typically {lead} before the reset.'), {
+            blocked: plan.blocked, days: plan.days, lead: durationText(plan.lead),
+        }));
+    }
+    if (plan.suggested !== null && plan.suggested !== undefined) {
+        parts.push(fmt(tr('planner_move', 'A first message around {suggested} would move the reset to about when you run out.'), {
+            suggested: dayClock(plan.suggested),
+        }));
+    }
+    return h('p', { class: 'planner-note' }, dot(provider.id), h('span', { text: parts.join(' ') }));
+}
+
+// HH:MM of a time given as seconds after local midnight.
+function dayClock(seconds) {
+    const minutes = Math.round(seconds / 60) % (24 * 60);
+    return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 }
 
 // The local days of the current cycle as spans of seconds into it, named by weekday.

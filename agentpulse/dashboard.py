@@ -32,6 +32,7 @@ from .forecast import CYCLE_RESET_TOLERANCE, Sample, next_local_time, quota_cycl
 from .formatting import field_period, field_sort_key, parse_field_name, popup_label, time_until
 from .i18n import T
 from .providers import SECONDARY_PROVIDERS_BY_NAME
+from .sessions import session_timeline
 from .settings import (
     DASHBOARD_HOST, DASHBOARD_PORT, HISTORY_PERSIST, PROVIDER_LABELS,
     dashboard_settings, history_write_path, save_dashboard_settings,
@@ -450,7 +451,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._send_statusline(params)
         elif path == '/api/history':
             range_name = params.get('range', ['24h'])[0]
-            self._send_json(_history_payload(self.dashboard_history, range_name))
+            workdays = tuple(dashboard_settings().get('budget_workdays') or ())
+            self._send_json(_history_payload(self.dashboard_history, range_name, workdays=workdays))
         elif path == '/api/history.csv':
             range_name = params.get('range', ['24h'])[0]
             self._send_bytes(
@@ -606,6 +608,9 @@ def _dashboard_i18n() -> dict[str, str]:
         'consumption_daily', 'consumption_hourly', 'consumption_meta', 'consumption_meta_mixed', 'pp',
         'heatmap', 'heatmap_cell', 'heatmap_peak', 'heatmap_less', 'heatmap_more',
         'typical_week', 'typical_verdict', 'typical_caption', 'typical_caption_forecast', 'typical_waiting', 'typical_now', 'typically',
+        'sessions_title', 'sessions_meta', 'sessions_label', 'session_tip', 'session_blocked_tip',
+        'blocks_period', 'blocks_count', 'blocks_none', 'blocks_none_detail', 'blocks_detail',
+        'planner_start', 'planner_blocked', 'planner_move',
         'meter_used', 'by_time', 'vs_usual_pace',
         'forecast_from_pace', 'forecast_from_history', 'forecast_from_average', 'forecast_band', 'forecast_band_history', 'limit_between',
         'waiting', 'waiting_usage', 'waiting_history', 'no_reset', 'not_detected', 'ago', 'footer_privacy',
@@ -633,7 +638,14 @@ def _dashboard_i18n() -> dict[str, str]:
     return strings
 
 
-def _history_payload(history: DashboardHistory, range_name: str, *, now: float | None = None, tz: tzinfo | None = None) -> dict[str, Any]:
+def _history_payload(
+    history: DashboardHistory,
+    range_name: str,
+    *,
+    now: float | None = None,
+    tz: tzinfo | None = None,
+    workdays: tuple[int, ...] = (),
+) -> dict[str, Any]:
     """Build the chart payload for one history range.
 
     Rows are aggregated to the range's ``_CHART_BUCKETS`` size, and every quota
@@ -651,14 +663,17 @@ def _history_payload(history: DashboardHistory, range_name: str, *, now: float |
         Current time as a Unix timestamp; defaults to :func:`time.time`.
     tz
         Time zone of the hour and day boundaries; the system's local time by default.
+    workdays
+        Weekdays the session planner looks at, Monday = 0; every day when empty.
 
     Returns
     -------
     dict
         ``range``, ``bucket_seconds``, ``rows``, ``fields``, ``consumption``
         (points used per hour or day, see :func:`_consumption_payload`),
-        ``heatmap`` (see :func:`_heatmap_payload`) and ``typical_week``
-        (``providers``, see :func:`agentpulse.typical_week.typical_week`).
+        ``heatmap`` (see :func:`_heatmap_payload`), ``typical_week``
+        (``providers``, see :func:`agentpulse.typical_week.typical_week`) and
+        ``sessions`` (see :func:`agentpulse.sessions.session_timeline`).
     """
     if range_name not in _RANGES:
         range_name = '24h'
@@ -674,6 +689,7 @@ def _history_payload(history: DashboardHistory, range_name: str, *, now: float |
         'consumption': _consumption_payload(series, range_name, now=now, tz=tz),
         'heatmap': _heatmap_payload(series, now=now, tz=tz),
         'typical_week': {'providers': typical_weeks(series, now=now)},
+        'sessions': session_timeline(series, now=now, workdays=workdays, tz=tz),
     }
 
 
