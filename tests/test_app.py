@@ -13,7 +13,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from agentpulse.app import AgentPulse, _Absence, _is_quiet_time
+from agentpulse.app import AgentPulse, _Absence, _is_quiet_time, _is_quota_alert
 from agentpulse.cache import UpdateResult
 from agentpulse.claude_cli import RefreshResult
 from agentpulse.dashboard import DashboardHistory
@@ -2437,6 +2437,160 @@ class TestThresholdCommand(unittest.TestCase):
         self.app.icon.notify.assert_not_called()
 
 
+class TestSpikeAlert(unittest.TestCase):
+    """Tests for the alert and command when a session quota is used unusually fast."""
+
+    PERIOD = 5 * 3600
+
+    def setUp(self):
+        self.app = _make_app()
+        self.app._first_update_done = True
+        self.now = time.time()
+        self.reset = self.now + 3 * 3600
+
+    def tearDown(self):
+        _cleanup(self.app)
+
+    def _iso(self, ts: float) -> str:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+    def _window(self, reset: float, per_half_hour: float, minutes: int, provider: str = 'claude', field: str = 'five_hour') -> dict:
+        """Record a window growing ``per_half_hour`` points every half hour, read every five minutes; return the last usage."""
+        usage = {}
+        for at in range(0, minutes + 1, 5):
+            usage = {field: {'utilization': per_half_hour * at / 30, 'resets_at': self._iso(reset)}}
+            self.app.dashboard.history.record(provider, usage, ts=reset - self.PERIOD + at * 60)
+        return usage
+
+    def _history(self, sessions: int = 4, provider: str = 'claude', field: str = 'five_hour') -> None:
+        for index in range(sessions, 0, -1):
+            self._window(self.reset - index * (self.PERIOD + 3600), 4.0, 150, provider, field)
+
+    def _run(self, per_half_hour: float = 20.0, provider: str = 'claude', field: str = 'five_hour') -> dict:
+        usage = self._window(self.reset, per_half_hour, 120, provider, field)
+        self.app._check_spike_alert(usage, provider=provider)
+        return usage
+
+    @patch('agentpulse.settings.ON_SPIKE_COMMAND', ['stop.bat'])
+    @patch('agentpulse.app.run_event_command')
+    def test_a_pace_far_above_the_history_warns_and_runs_the_command(self, mock_cmd):
+        self._history()
+
+        self._run()
+
+        self.app.icon.notify.assert_called_once()
+        message, title = self.app.icon.notify.call_args.args
+        self.assertEqual(title, T['notify_spike_title'])
+        self.assertIn('Claude', message)
+        self.assertIn('20', message)
+        cmd, env = mock_cmd.call_args[0]
+        self.assertEqual(cmd, ['stop.bat'])
+        self.assertEqual(env['USAGE_MONITOR_EVENT'], 'spike')
+        self.assertEqual(env['AGENTPULSE_VARIANT'], 'five_hour')
+        self.assertEqual((env['USAGE_MONITOR_GROWTH'], env['USAGE_MONITOR_TYPICAL'], env['USAGE_MONITOR_UTILIZATION']), ('20', '4', '80'))
+        self.assertEqual(env['AGENTPULSE_PROVIDER'], 'claude')
+        self.assertEqual(env['USAGE_MONITOR_MESSAGE'], message)
+        self.assertEqual(env['USAGE_MONITOR_RESETS_AT'], self._iso(self.reset))
+
+    def test_an_ordinary_pace_is_quiet(self):
+        self._history()
+
+        self._run(per_half_hour=6.0)
+
+        self.app.icon.notify.assert_not_called()
+
+    def test_no_alert_without_enough_history(self):
+        self._history(sessions=2)
+
+        self._run()
+
+        self.app.icon.notify.assert_not_called()
+
+    @patch('agentpulse.settings.SPIKE_ALERT_ENABLED', False)
+    @patch('agentpulse.settings.ON_SPIKE_COMMAND', ['stop.bat'])
+    @patch('agentpulse.app.run_event_command')
+    def test_turned_off_it_neither_warns_nor_runs_the_command(self, mock_cmd):
+        self._history()
+
+        self._run()
+
+        self.app.icon.notify.assert_not_called()
+        mock_cmd.assert_not_called()
+
+    def test_a_spike_is_reported_once_an_hour(self):
+        self._history()
+        usage = self._run()
+        self.app.icon.notify.reset_mock()
+
+        self.app._check_spike_alert(usage, provider='claude')
+        self.assertEqual(self.app.icon.notify.call_count, 0)
+
+        self.app._spike_alerted_at['claude'] = time.time() - 61 * 60
+        self.app._check_spike_alert(usage, provider='claude')
+        self.assertEqual(self.app.icon.notify.call_count, 1)
+
+    def test_each_provider_has_its_own_hour(self):
+        self._history()
+        self._history(provider='codex')
+        self._run()
+        self._run(provider='codex')
+
+        self.assertEqual(self.app.icon.notify.call_count, 2)
+        self.assertIn('Codex', self.app.icon.notify.call_args_list[1].args[0])
+
+    @patch('agentpulse.settings.ON_SPIKE_COMMAND', ['stop.bat'])
+    @patch('agentpulse.app.run_event_command')
+    def test_the_first_update_warns_without_running_the_command(self, mock_cmd):
+        self.app._first_update_done = False
+        self._history()
+
+        self._run()
+
+        self.app.icon.notify.assert_called_once()
+        mock_cmd.assert_not_called()
+
+    @patch('agentpulse.settings.ON_SPIKE_COMMAND', ['stop.bat'])
+    @patch('agentpulse.app.run_event_command')
+    @patch('agentpulse.app.is_workstation_locked', return_value=True)
+    def test_while_away_the_warning_waits_but_the_command_runs(self, _locked, mock_cmd):
+        self._history()
+        self._history(provider='codex')
+
+        self._run()
+        self._run(provider='codex')
+
+        self.app.icon.notify.assert_not_called()
+        self.assertEqual(mock_cmd.call_count, 2)
+        self.assertEqual(sorted(self.app._deferred_notifications), ['codex_spike', 'spike'])
+
+    def test_a_warning_held_back_survives_the_away_summary(self):
+        self.assertFalse(_is_quota_alert('spike'))
+        self.assertFalse(_is_quota_alert('codex_spike'))
+
+    def test_providers_without_a_session_window_are_skipped(self):
+        self._history(field='seven_day')
+
+        self._run(field='seven_day')
+
+        self.app.icon.notify.assert_not_called()
+
+    def test_process_alerts_checks_for_a_spike(self):
+        self._history()
+        usage = self._window(self.reset, 20.0, 120)
+
+        self.app._process_provider_alerts('claude', usage)
+
+        self.assertIn(T['notify_spike_title'], [call.args[1] for call in self.app.icon.notify.call_args_list])
+
+    @patch('agentpulse.app.run_event_command')
+    def test_no_command_without_a_setting(self, mock_cmd):
+        self._history()
+
+        self._run()
+
+        mock_cmd.assert_not_called()
+
+
 class TestExtraUsageCommand(unittest.TestCase):
     """Tests for on_threshold_command with extra usage events."""
 
@@ -2522,6 +2676,22 @@ class TestTestEventCommands(unittest.TestCase):
         self.assertEqual(env['USAGE_MONITOR_PREV_UTILIZATION'], '99')
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_FIVE_HOUR'], '12')
         self.assertEqual(env['USAGE_MONITOR_UTILIZATION_SEVEN_DAY'], '0')
+        self.assertIn('USAGE_MONITOR_RESETS_AT', env)
+
+    @patch('agentpulse.settings.ON_SPIKE_COMMAND', ['stop.bat'])
+    @patch('agentpulse.app.run_event_command')
+    def test_spike_fires_with_correct_env(self, mock_cmd):
+        """Test runaway handler passes the growth and the usual pace along with the common variables."""
+        self.app.on_test_spike()
+
+        cmd, env = mock_cmd.call_args[0]
+        self.assertEqual(cmd, ['stop.bat'])
+        self.assertEqual(env['USAGE_MONITOR_EVENT'], 'spike')
+        self.assertEqual(env['USAGE_MONITOR_VARIANT'], 'five_hour')
+        self.assertEqual((env['USAGE_MONITOR_GROWTH'], env['USAGE_MONITOR_TYPICAL']), ('38', '14'))
+        self.assertEqual(env['AGENTPULSE_GROWTH'], '38')
+        self.assertEqual(env['USAGE_MONITOR_TITLE'], T['notify_spike_title'])
+        self.assertIn('38', env['USAGE_MONITOR_MESSAGE'])
         self.assertIn('USAGE_MONITOR_RESETS_AT', env)
 
     @patch('agentpulse.settings.ON_THRESHOLD_COMMAND', ['notify.bat'])

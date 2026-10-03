@@ -1262,6 +1262,86 @@ class TestAwaySummarySettings(unittest.TestCase):
                 settings_mod.reload()
 
 
+class TestSpikeSettings(unittest.TestCase):
+    """Tests for the spike_alert_enabled and on_spike_command settings (the runaway alert)."""
+
+    def _run_validate(self, data: dict) -> tuple[dict, MagicMock]:
+        mock_ctypes = MagicMock()
+        with patch.object(settings_mod, 'ctypes', mock_ctypes):
+            result = settings_mod._validate(dict(data), Path('/fake/settings.json'))
+        return result, mock_ctypes
+
+    def test_on_without_a_settings_file_and_without_a_command(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    settings_mod.reload()
+                    self.assertTrue(settings_mod.SPIKE_ALERT_ENABLED)
+                    self.assertEqual(settings_mod.ON_SPIKE_COMMAND, [])
+            finally:
+                # Back to the values of the real settings files.
+                settings_mod.reload()
+
+    def test_file_accepts_true_and_false(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                result, mock = self._run_validate({'spike_alert_enabled': value})
+                self.assertIs(result['spike_alert_enabled'], value)
+                mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_file_drops_a_non_boolean_with_a_message(self):
+        result, mock = self._run_validate({'spike_alert_enabled': 'yes'})
+
+        self.assertNotIn('spike_alert_enabled', result)
+        mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_command_string_is_normalized_to_a_list(self):
+        result, mock = self._run_validate({'on_spike_command': 'taskkill /IM node.exe'})
+
+        self.assertEqual(result['on_spike_command'], ['taskkill /IM node.exe'])
+        mock.windll.user32.MessageBoxW.assert_not_called()
+
+    def test_command_list_passes_and_other_values_are_dropped(self):
+        result, _mock = self._run_validate({'on_spike_command': ['stop.bat', 'notify.bat']})
+        self.assertEqual(result['on_spike_command'], ['stop.bat', 'notify.bat'])
+
+        result, mock = self._run_validate({'on_spike_command': 7})
+        self.assertNotIn('on_spike_command', result)
+        mock.windll.user32.MessageBoxW.assert_called_once()
+
+    def test_dashboard_saves_both(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'spike_alert_enabled': False, 'on_spike_command': ['stop.bat']})
+
+        self.assertEqual((accepted, errors), ({'spike_alert_enabled': False, 'on_spike_command': ['stop.bat']}, []))
+
+    def test_dashboard_rejects_a_non_boolean_and_a_bad_command(self):
+        accepted, errors = settings_mod._clean_dashboard_settings({'spike_alert_enabled': 1, 'on_spike_command': [1]})
+
+        self.assertEqual(accepted, {})
+        self.assertEqual(len(errors), 2)
+
+    def test_dashboard_settings_expose_both(self):
+        exposed = settings_mod.dashboard_settings()
+
+        self.assertIsInstance(exposed['spike_alert_enabled'], bool)
+        self.assertIsInstance(exposed['on_spike_command'], list)
+
+    def test_saved_values_apply_without_a_restart(self):
+        with TemporaryDirectory() as app_tmp, TemporaryDirectory() as home_tmp:
+            fake_file = str(Path(app_tmp) / 'agentpulse' / 'settings.py')
+            try:
+                with patch.object(settings_mod, '__file__', fake_file), \
+                     patch.object(Path, 'home', return_value=Path(home_tmp)):
+                    ok, _errors, _path = settings_mod.save_dashboard_settings({'spike_alert_enabled': False, 'on_spike_command': ['stop.bat']})
+                    self.assertTrue(ok)
+                    self.assertFalse(settings_mod.SPIKE_ALERT_ENABLED)
+                    self.assertEqual(settings_mod.ON_SPIKE_COMMAND, ['stop.bat'])
+            finally:
+                settings_mod.reload()
+
+
 class TestBudgetWorkdaysSettings(unittest.TestCase):
     """Tests for the budget_workdays setting (daily budget of weekly quotas)."""
 

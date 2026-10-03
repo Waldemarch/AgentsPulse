@@ -110,6 +110,10 @@
                 <span data-i18n="away_summary">Sum up what happened while you were away</span>
                 <input id="awaySummaryEnabled" type="checkbox">
             </label>
+            <label class="toggle wide">
+                <span data-i18n="spike_alert">Warn when a session is used unusually fast</span>
+                <input id="spikeAlertEnabled" type="checkbox">
+            </label>
             <label class="toggle wide"><span data-i18n="quiet_hours">Quiet hours</span><input id="quietHoursEnabled" type="checkbox"></label>
             <label><span data-i18n="quiet_starts">Quiet starts</span><input id="quietHoursStart" type="time"></label>
             <label><span data-i18n="quiet_ends">Quiet ends</span><input id="quietHoursEnd" type="time"></label>
@@ -126,6 +130,11 @@
                 <textarea id="thresholdCommand" rows="2" spellcheck="false"></textarea>
             </label>
             <div class="wide inline-actions"><button type="button" id="testThreshold" data-i18n="test_threshold">Test Threshold</button></div>
+            <label class="wide">
+                <span data-i18n="spike_command">Runaway commands (one per line)</span>
+                <textarea id="spikeCommand" rows="2" spellcheck="false"></textarea>
+            </label>
+            <div class="wide inline-actions"><button type="button" id="testSpike" data-i18n="test_spike">Test Runaway</button></div>
         </fieldset>
         <fieldset class="set-group">
             <legend data-i18n="group_tray">Tray and providers</legend>

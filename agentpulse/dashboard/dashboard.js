@@ -1570,6 +1570,7 @@ async function loadSettings() {
     byId('predictionDayEnd').value = settings.prediction_day_end_time || '18:00';
     byId('heatmapEnabled').checked = settings.heatmap_enabled !== false;
     byId('awaySummaryEnabled').checked = settings.away_summary_enabled !== false;
+    byId('spikeAlertEnabled').checked = settings.spike_alert_enabled !== false;
     byId('quietHoursEnabled').checked = !!settings.quiet_hours_enabled;
     byId('quietHoursStart').value = settings.quiet_hours_start || '22:00';
     byId('quietHoursEnd').value = settings.quiet_hours_end || '08:00';
@@ -1577,6 +1578,7 @@ async function loadSettings() {
     // One command per line: each runs on its own, exactly like the array in the settings file.
     byId('resetCommand').value = (settings.on_reset_command || []).join('\n');
     byId('thresholdCommand').value = (settings.on_threshold_command || []).join('\n');
+    byId('spikeCommand').value = (settings.on_spike_command || []).join('\n');
     byId('statuslineEnabled').checked = !!settings.statusline_enabled;
     const workdays = settings.budget_workdays || [];
     for (const input of document.querySelectorAll('input[name="budgetDay"]')) input.checked = workdays.includes(Number(input.value));
@@ -1613,11 +1615,13 @@ async function saveSettings(event) {
         prediction_day_end_time: byId('predictionDayEnd').value || '18:00',
         heatmap_enabled: byId('heatmapEnabled').checked,
         away_summary_enabled: byId('awaySummaryEnabled').checked,
+        spike_alert_enabled: byId('spikeAlertEnabled').checked,
         quiet_hours_enabled: byId('quietHoursEnabled').checked,
         quiet_hours_start: byId('quietHoursStart').value || '22:00',
         quiet_hours_end: byId('quietHoursEnd').value || '08:00',
         on_reset_command: parseLines(byId('resetCommand').value),
         on_threshold_command: parseLines(byId('thresholdCommand').value),
+        on_spike_command: parseLines(byId('spikeCommand').value),
         statusline_enabled: byId('statuslineEnabled').checked,
         budget_workdays: Array.from(document.querySelectorAll('input[name="budgetDay"]:checked'), (input) => Number(input.value)),
     };
@@ -1705,6 +1709,7 @@ byId('drawerBackdrop').addEventListener('click', closeDrawer);
 byId('settingsForm').addEventListener('submit', saveSettings);
 byId('testReset').addEventListener('click', () => testEvent('reset'));
 byId('testThreshold').addEventListener('click', () => testEvent('threshold'));
+byId('testSpike').addEventListener('click', () => testEvent('spike'));
 byId('copyStatusline').addEventListener('click', copyStatusline);
 byId('statuslineSnippet').textContent = statuslineSnippet();
 byId('historyTable').addEventListener('toggle', () => {

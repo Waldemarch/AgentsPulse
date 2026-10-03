@@ -203,6 +203,25 @@ class DashboardHistory:
                 fields.setdefault(field, []).append(Sample(item.ts, entry['utilization'], reset_timestamp(entry['resets_at'])))
         return grouped
 
+    def readings(self, provider: str, field: str, *, since: float) -> list[Sample]:
+        """Return one quota field's stored readings since a Unix time, oldest first.
+
+        Reads only as far back as needed, so a short look-behind stays cheap
+        however long the history is.
+        """
+        with self._lock:
+            items = list(self._items)
+
+        samples: list[Sample] = []
+        for item in reversed(items):
+            if item.ts < since:
+                break
+            entry = item.usage.get(field)
+            if item.provider == provider and entry is not None:
+                samples.append(Sample(item.ts, entry['utilization'], reset_timestamp(entry['resets_at'])))
+        samples.reverse()
+        return samples
+
     def to_csv(self, range_name: str = '24h') -> str:
         """Return history rows as CSV."""
         output = StringIO()
@@ -505,8 +524,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             elif event == 'threshold':
                 self.dashboard_app.on_test_threshold_5h()
                 self._send_json({'ok': True})
+            elif event == 'spike':
+                self.dashboard_app.on_test_spike()
+                self._send_json({'ok': True})
             else:
-                self._send_json({'ok': False, 'errors': ['event must be reset or threshold']})
+                self._send_json({'ok': False, 'errors': ['event must be reset, threshold or spike']})
         else:
             self.send_error(404)
 
@@ -621,8 +643,8 @@ def _dashboard_i18n() -> dict[str, str]:
         'codex_monitoring', 'kimi_monitoring', 'quiet_hours', 'away_summary', 'tooltip_fields', 'predictions',
         'thr_claude_5h', 'thr_claude_7d', 'thr_codex_5h', 'thr_codex_7d',
         'thr_kimi_5h', 'thr_kimi_7d',
-        'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command',
-        'save_settings', 'test_reset', 'test_threshold', 'restart_required',
+        'predict_until', 'quiet_starts', 'quiet_ends', 'reset_command', 'threshold_command', 'spike_alert', 'spike_command',
+        'save_settings', 'test_reset', 'test_threshold', 'test_spike', 'restart_required',
         'saved', 'error', 'session_expired', 'test_fired', 'test_failed', 'unknown_error',
         'connection_lost',
     ]

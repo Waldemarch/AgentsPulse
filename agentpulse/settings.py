@@ -20,11 +20,11 @@ __all__ = [
     'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'ICON_STYLE', 'ICON_STYLES', 'IDLE_PAUSE',
     'KIMI_ENABLED',
     'LANGUAGE', 'LEGACY_SETTINGS_FILENAMES', 'MAX_BACKOFF',
-    'ON_RESET_COMMAND', 'ON_THRESHOLD_COMMAND',
+    'ON_RESET_COMMAND', 'ON_SPIKE_COMMAND', 'ON_THRESHOLD_COMMAND',
     'POLL_ERROR', 'POLL_FAST', 'POLL_FAST_EXTRA', 'POLL_INTERVAL',
     'POPUP_FIELDS', 'PREDICTION_DAY_END_TIME', 'PREDICTION_ENABLED', 'PROVIDER_COLORS', 'PROVIDER_LABELS',
     'QUIET_HOURS_ENABLED', 'QUIET_HOURS_END', 'QUIET_HOURS_START',
-    'SETTINGS_FILENAME', 'STATUSLINE_ENABLED', 'TOOLTIP_FIELDS',
+    'SETTINGS_FILENAME', 'SPIKE_ALERT_ENABLED', 'STATUSLINE_ENABLED', 'TOOLTIP_FIELDS',
     'dashboard_settings', 'get_alert_thresholds', 'history_write_path', 'reload', 'save_dashboard_settings', 'settings_write_path',
     'EMAIL_DISPLAY', 'SHOW_INSTALL_SECTION',
 ]
@@ -51,12 +51,12 @@ _MIN_INTS = {
 _COLORS = {'bg', 'fg', 'fg_dim', 'fg_heading', 'fg_link', 'bar_bg', 'bar_fg', 'bar_fg_tight', 'bar_fg_warn', 'bar_divider', 'bar_marker'}
 _BOOLEANS = {
     'alert_time_aware', 'codex_enabled', 'kimi_enabled', 'history_persist', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled',
-    'show_install_section', 'statusline_enabled', 'away_summary_enabled',
+    'show_install_section', 'statusline_enabled', 'away_summary_enabled', 'spike_alert_enabled',
 }
 _EMAIL_DISPLAY_VALUES = ('show', 'hide', 'blur')
 _STRINGS = {'currency_symbol', 'language'}
 _TIMES = {'prediction_day_end_time', 'quiet_hours_start', 'quiet_hours_end'}
-_COMMANDS = {'on_reset_command', 'on_threshold_command'}
+_COMMANDS = {'on_reset_command', 'on_threshold_command', 'on_spike_command'}
 _FIELD_LISTS = {'tooltip_fields'}
 _WILDCARD_LISTS = {'popup_fields'}
 _ICON_COLORS = {'icon_light', 'icon_dark'}
@@ -64,7 +64,7 @@ _THRESHOLD_PREFIX = 'alert_thresholds_'
 _BAR_MODES = {'utilization', 'overage'}
 _DASHBOARD_KEYS = {
     'codex_enabled', 'kimi_enabled', 'icon_fields', 'tooltip_fields',
-    'on_reset_command', 'on_threshold_command',
+    'on_reset_command', 'on_threshold_command', 'on_spike_command', 'spike_alert_enabled',
     'prediction_enabled', 'prediction_day_end_time',
     'heatmap_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end',
     'show_install_section', 'email_display', 'icon_style', 'statusline_enabled', 'away_summary_enabled',
@@ -316,6 +316,7 @@ def _clean_dashboard_settings(data: dict[str, object]) -> tuple[dict[str, object
                 errors.append(f'{key}: invalid value')
         elif key in {
             'codex_enabled', 'kimi_enabled', 'prediction_enabled', 'heatmap_enabled', 'quiet_hours_enabled', 'statusline_enabled', 'away_summary_enabled',
+            'spike_alert_enabled',
         }:
             if isinstance(value, bool):
                 accepted[key] = value
@@ -371,6 +372,8 @@ def dashboard_settings() -> dict[str, object]:
         'alert_thresholds_kimi_seven_day': get_alert_thresholds('seven_day', provider='kimi'),
         'on_reset_command': ON_RESET_COMMAND,
         'on_threshold_command': ON_THRESHOLD_COMMAND,
+        'on_spike_command': ON_SPIKE_COMMAND,
+        'spike_alert_enabled': SPIKE_ALERT_ENABLED,
         'prediction_enabled': PREDICTION_ENABLED,
         'prediction_day_end_time': PREDICTION_DAY_END_TIME,
         'heatmap_enabled': HEATMAP_ENABLED,
@@ -464,6 +467,8 @@ CURRENCY_SYMBOL = _S.get('currency_symbol', '€')
 LANGUAGE = _S.get('language', '')
 ON_RESET_COMMAND = _S.get('on_reset_command', [])
 ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
+ON_SPIKE_COMMAND = _S.get('on_spike_command', [])
+SPIKE_ALERT_ENABLED = _S.get('spike_alert_enabled', True)
 CODEX_ENABLED = _S.get('codex_enabled', True)
 KIMI_ENABLED = _S.get('kimi_enabled', True)
 SHOW_INSTALL_SECTION = _S.get('show_install_section', False)
@@ -512,7 +517,7 @@ def reload() -> None:
     """
     global _S
     global QUIET_HOURS_ENABLED, QUIET_HOURS_START, QUIET_HOURS_END, AWAY_SUMMARY_ENABLED, BUDGET_WORKDAYS
-    global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND
+    global ON_RESET_COMMAND, ON_THRESHOLD_COMMAND, ON_SPIKE_COMMAND, SPIKE_ALERT_ENABLED
     global PREDICTION_ENABLED, PREDICTION_DAY_END_TIME
     global HEATMAP_ENABLED, STATUSLINE_ENABLED, CODEX_ENABLED, KIMI_ENABLED
     global ICON_FIELDS, ICON_STYLE, TOOLTIP_FIELDS
@@ -528,6 +533,8 @@ def reload() -> None:
     BUDGET_WORKDAYS = _S.get('budget_workdays', [0, 1, 2, 3, 4])
     ON_RESET_COMMAND = _S.get('on_reset_command', [])
     ON_THRESHOLD_COMMAND = _S.get('on_threshold_command', [])
+    ON_SPIKE_COMMAND = _S.get('on_spike_command', [])
+    SPIKE_ALERT_ENABLED = _S.get('spike_alert_enabled', True)
     PREDICTION_ENABLED = _S.get('prediction_enabled', True)
     PREDICTION_DAY_END_TIME = _S.get('prediction_day_end_time', '18:00')
     HEATMAP_ENABLED = _S.get('heatmap_enabled', True)
