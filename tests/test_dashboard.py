@@ -79,6 +79,28 @@ class TestDashboardHistory(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['utilization'], 20.0)
 
+    def test_readings_of_one_field_since_a_time(self):
+        history = DashboardHistory()
+        reset = '2026-01-01T05:00:00+00:00'
+        for ts, provider, pct in ((100, 'claude', 10), (200, 'codex', 99), (300, 'claude', 20), (400, 'claude', 30)):
+            history.record(provider, {'five_hour': {'utilization': pct, 'resets_at': reset}, 'seven_day': {'utilization': 1, 'resets_at': reset}}, ts=ts)
+
+        readings = history.readings('claude', 'five_hour', since=250)
+
+        self.assertEqual([(sample.ts, sample.utilization) for sample in readings], [(300, 20.0), (400, 30.0)])
+        self.assertEqual(readings[0].reset, datetime.fromisoformat(reset).timestamp())
+
+    def test_readings_include_the_boundary_and_skip_errors_and_other_fields(self):
+        history = DashboardHistory()
+        history.record('claude', {'five_hour': {'utilization': 5, 'resets_at': ''}}, ts=100)
+        history.record('claude', {'error': 'down'}, ts=150)
+        history.record('claude', {'seven_day': {'utilization': 9, 'resets_at': ''}}, ts=200)
+
+        self.assertEqual([sample.ts for sample in history.readings('claude', 'five_hour', since=100)], [100])
+        self.assertEqual(history.readings('claude', 'five_hour', since=101), [])
+        self.assertEqual(history.readings('claude', 'iguana_necktie', since=0), [])
+        self.assertIsNone(history.readings('claude', 'five_hour', since=0)[0].reset)
+
     def test_csv_export_has_header_and_values(self):
         history = DashboardHistory()
         history.record('claude', {'five_hour': {'utilization': 12, 'resets_at': 'soon'}}, ts=time.time())
@@ -782,6 +804,22 @@ class TestSettingsEndpoint(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             return json.loads(response.read().decode('utf-8'))
 
+    def test_test_event_runs_the_matching_command(self):
+        for event, handler in (('reset', 'on_test_reset_5h'), ('threshold', 'on_test_threshold_5h'), ('spike', 'on_test_spike')):
+            with self.subTest(event=event):
+                self.server.app.reset_mock()
+
+                result = self._post_json('/api/test-event', {'event': event})
+
+                self.assertEqual(result, {'ok': True})
+                getattr(self.server.app, handler).assert_called_once_with()
+
+    def test_test_event_rejects_an_unknown_event(self):
+        result = self._post_json('/api/test-event', {'event': 'meltdown'})
+
+        self.assertFalse(result['ok'])
+        self.assertIn('spike', result['errors'][0])
+
     def test_get_settings_includes_autostart_state(self):
         fake = _fake_autostart_module(enabled=True)
         with patch.dict(sys.modules, {'agentpulse.autostart': fake}):
@@ -918,6 +956,11 @@ class TestRequestValidation(unittest.TestCase):
         status = self._post_status('/api/test-event', {'event': 'threshold'}, {'Content-Type': 'text/plain'})
         self.assertEqual(status, 403)
         self.app.on_test_threshold_5h.assert_not_called()
+
+    def test_csrf_style_spike_test_post_does_not_run_commands(self):
+        status = self._post_status('/api/test-event', {'event': 'spike'}, {'Content-Type': 'text/plain'})
+        self.assertEqual(status, 403)
+        self.app.on_test_spike.assert_not_called()
 
     def test_open_passes_session_token_in_url(self):
         with patch('agentpulse.dashboard.webbrowser.open') as mock_open:

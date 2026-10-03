@@ -31,11 +31,13 @@ from .kimi_api import read_access_token as read_kimi_access_token
 from .kimi_cache import KimiCache
 from .popup import UsagePopup
 from . import settings as _settings
+from .sessions import session_field
 from .settings import (
     CODEX_ENABLED, DASHBOARD_PORT, IDLE_PAUSE,
     KIMI_ENABLED, POLL_ERROR, POLL_FAST, POLL_FAST_EXTRA, POLL_INTERVAL, PROVIDER_LABELS,
     get_alert_thresholds,
 )
+from .spike import MIN_POINTS, Spike, current_growth, find_spike
 from .statusline import format_statusline
 from .tray_icon import (
     create_countdown_image, create_icon_image, create_ready_image, create_status_image,
@@ -50,6 +52,10 @@ _READY_SECONDS = 10 * 60
 _OUTLOOK_HISTORY_SECONDS = 30 * 24 * 3600
 # An absence at least this long ends with one summary of what happened meanwhile.
 _AWAY_SUMMARY_SECONDS = 15 * 60
+# A provider's runaway alert repeats at most this often, however long the spike lasts.
+_SPIKE_COOLDOWN_SECONDS = 60 * 60
+# The runaway alert reads the last hour for the current pace and 30 days for what is usual.
+_SPIKE_RECENT_SECONDS = 60 * 60
 
 
 def _future_iso(**delta: float) -> str:
@@ -128,6 +134,7 @@ class AgentPulse:
         self._prev_account_uuid: str | None = None
         self._first_update_done = False
         self._notified_thresholds: dict[str, float] = {}
+        self._spike_alerted_at: dict[str, float] = {}
         self._deferred_notifications: dict[str, tuple[str, str]] = {}
         self._fast_polls_remaining = 0
         self._idle_reset_pending = False
@@ -168,8 +175,9 @@ class AgentPulse:
                     pystray.MenuItem(T['test_reset_7d'], self.on_test_reset_7d, enabled=bool(_settings.ON_RESET_COMMAND)),
                     pystray.MenuItem(T['test_threshold_5h'], self.on_test_threshold_5h, enabled=bool(_settings.ON_THRESHOLD_COMMAND)),
                     pystray.MenuItem(T['test_threshold_7d'], self.on_test_threshold_7d, enabled=bool(_settings.ON_THRESHOLD_COMMAND)),
+                    pystray.MenuItem(T['test_spike'], self.on_test_spike, enabled=bool(_settings.ON_SPIKE_COMMAND)),
                 ),
-                enabled=bool(_settings.ON_RESET_COMMAND or _settings.ON_THRESHOLD_COMMAND),
+                enabled=bool(_settings.ON_RESET_COMMAND or _settings.ON_THRESHOLD_COMMAND or _settings.ON_SPIKE_COMMAND),
             ),
             pystray.MenuItem(f"{T.get('open_dashboard', 'Open Dashboard')} (localhost:{DASHBOARD_PORT})", self.on_open_dashboard),
             pystray.MenuItem(T['restart'], self.on_restart),
@@ -240,6 +248,14 @@ class AgentPulse:
         env = self._test_env('threshold', 'seven_day', '81', threshold='80', resets_at=_future_iso(days=4))
         env.update(_dual_prefixed_env({'TITLE': T['notify_threshold_title'], 'MESSAGE': message}))
         run_event_command(_settings.ON_THRESHOLD_COMMAND, env)
+
+    def on_test_spike(self, icon: Any = None, item: Any = None) -> None:
+        message = T['notify_spike'].format(
+            provider=PROVIDER_LABELS['claude'], label=popup_label('five_hour'), growth='38', typical='14', clock=datetime.now().strftime('%H:%M'),
+        )
+        env = self._test_env('spike', 'five_hour', '64', resets_at=_future_iso(hours=3))
+        env.update(_dual_prefixed_env({'GROWTH': '38', 'TYPICAL': '14', 'TITLE': T['notify_spike_title'], 'MESSAGE': message}))
+        run_event_command(_settings.ON_SPIKE_COMMAND, env)
 
     def secondary_providers(self) -> list[tuple[str, Any]]:
         """Return the active non-Claude provider caches, in display order.
@@ -520,6 +536,7 @@ class AgentPulse:
                 self._run_reset_command(key, pct, old, data=data, entry=data.get(key, {}), provider=provider)
                 self._idle_reset_pending = False
         self._check_threshold_alerts(data, provider=provider)
+        self._check_spike_alert(data, provider=provider)
         self._provider_prev_utilization[provider] = current
         return current
 
@@ -597,6 +614,51 @@ class AgentPulse:
                 self._notified_thresholds[state_key] = highest
         if provider == 'claude':
             self._check_extra_usage_alerts(data)
+
+    def _check_spike_alert(self, data: dict[str, Any], *, provider: str) -> None:
+        """Warn, and run the runaway command, when a provider's session quota is used unusually fast.
+
+        The current pace is read from the last hour of history first; the 30
+        days it is compared with are only read when that pace is high enough
+        to matter.  A spike is reported at most once an hour per provider.
+        """
+        if not _settings.SPIKE_ALERT_ENABLED:
+            return
+        field = session_field(self._quota_fields(data))
+        now = time.time()
+        if field is None or now - self._spike_alerted_at.get(provider, 0.0) < _SPIKE_COOLDOWN_SECONDS:
+            return
+        history = self.dashboard.history
+        growth = current_growth(history.readings(provider, field, since=now - _SPIKE_RECENT_SECONDS), now=now)
+        if growth is None or growth < MIN_POINTS:
+            return
+        spike = find_spike(history.readings(provider, field, since=now - _OUTLOOK_HISTORY_SECONDS), now=now)
+        if spike is None:
+            return
+
+        self._spike_alerted_at[provider] = now
+        label = PROVIDER_LABELS.get(provider, provider.title())
+        message = T['notify_spike'].format(
+            provider=label, label=popup_label(field), growth=f'{spike.growth:.0f}', typical=f'{spike.typical:.0f}', clock=datetime.now().strftime('%H:%M'),
+        )
+        title = T['notify_spike_title']
+        self._notify_or_defer('spike' if provider == 'claude' else f'{provider}_spike', message, title)
+        self._run_spike_command(field, spike, title, message, provider=provider)
+
+    def _run_spike_command(self, variant: str, spike: Spike, title: str, message: str, *, provider: str) -> None:
+        if not _settings.ON_SPIKE_COMMAND or not self._first_update_done:
+            return
+        env = _event_env({
+            'EVENT': 'spike',
+            'VARIANT': variant,
+            'UTILIZATION': str(round(spike.utilization)),
+            'GROWTH': str(round(spike.growth)),
+            'TYPICAL': str(round(spike.typical)),
+            'RESETS_AT': datetime.fromtimestamp(spike.resets_at, tz=timezone.utc).isoformat(),
+            'TITLE': title,
+            'MESSAGE': message,
+        }, provider=provider)
+        run_event_command(_settings.ON_SPIKE_COMMAND, env)
 
     def _check_extra_usage_alerts(self, data: dict[str, Any]) -> None:
         extra = data.get('extra_usage')

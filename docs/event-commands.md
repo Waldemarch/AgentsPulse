@@ -1,6 +1,6 @@
 # Event Commands
 
-Run a custom shell command when a quota resets or a usage threshold is crossed. Commands run asynchronously and do not block the app. Event details are passed as environment variables so your command or script can use them directly.
+Run a custom shell command when a quota resets, a usage threshold is crossed, or a session quota is used unusually fast. Commands run asynchronously and do not block the app. Event details are passed as environment variables so your command or script can use them directly.
 
 ## Settings
 
@@ -10,14 +10,15 @@ Add these keys to your [`agentpulse-settings.json`](configuration.md). After sav
 |-----|---------|-------------|
 | `on_reset_command` | *(none)* | Shell command (or array of commands) to run when a quota resets (usage drops) |
 | `on_threshold_command` | *(none)* | Shell command (or array of commands) to run when usage crosses a configured alert threshold |
+| `on_spike_command` | *(none)* | Shell command (or array of commands) to run when a session quota is used unusually fast (a runaway agent) |
 
 Commands run with the same privileges as the app and **without a visible window** - no console pops up and no focus is stolen. This is ideal for background tasks like sending notifications, playing sounds, or running headless commands (e.g. `claude -p "..."`). Relative paths in commands are resolved relative to the executable's folder (or the project root when running from source).
 
 Both settings accept a single command string or an array of strings to run multiple commands per event. When an array is provided, all commands are launched independently (fire-and-forget) - if one fails, the others still run.
 
-Commands only fire on **state changes** detected while the app is running. On app startup, already-exceeded thresholds trigger a desktop notification but do not run `on_threshold_command` - this prevents duplicate commands after a restart or reboot.
+Commands only fire on **state changes** detected while the app is running. On app startup, already-exceeded thresholds trigger a desktop notification but do not run `on_threshold_command`, and an unusually fast session does not run `on_spike_command` - this prevents duplicate commands after a restart or reboot.
 
-When `on_reset_command` is configured, the app briefly wakes from idle/lock pause to poll at the expected reset time so the command fires promptly - even if the computer is unattended. If the API has not applied the reset yet (server-side delay) or the network is temporarily unavailable, the app retries at regular intervals until the reset is confirmed. `on_threshold_command` does not wake from idle - thresholds are driven by active usage, so they are checked when polling resumes after the user returns. Desktop notifications that occur during idle are deferred and shown when the user returns.
+When `on_reset_command` is configured, the app briefly wakes from idle/lock pause to poll at the expected reset time so the command fires promptly - even if the computer is unattended. If the API has not applied the reset yet (server-side delay) or the network is temporarily unavailable, the app retries at regular intervals until the reset is confirmed. `on_threshold_command` does not wake from idle - thresholds are driven by active usage, so they are checked when polling resumes after the user returns. `on_spike_command` runs as soon as a reading shows the spike, also while you are away or in quiet hours, and at most once an hour per provider; only its desktop notification waits. Desktop notifications that occur during idle are deferred and shown when the user returns.
 
 > [!TIP]
 > If you need a visible terminal, prefix your command with `start cmd /c`, e.g.:
@@ -139,7 +140,7 @@ Available in all event commands:
 | Variable | Example | Description |
 |---|---|---|
 | `AGENTPULSE_VERSION` | `1.13.0` | Running app version |
-| `AGENTPULSE_EVENT` | `reset` or `threshold` | Event type |
+| `AGENTPULSE_EVENT` | `reset`, `threshold` or `spike` | Event type |
 | `AGENTPULSE_PROVIDER` | `claude`, `codex`, or `kimi` | Provider that triggered the event |
 | `USAGE_MONITOR_VERSION` | `1.13.0` | Running app version |
 
@@ -196,5 +197,27 @@ Fires when usage crosses a configured alert threshold.
 | `USAGE_MONITOR_EXTRA_LIMIT` | `$10.00` | Monthly limit (extra usage only) |
 
 Extra usage variables are only set when the affected variant is `extra_usage`.
+
+### `on_spike_command`
+
+Fires when a provider's session quota is used unusually fast, see [Runaway alert](configuration.md#runaway-alert). Use `AGENTPULSE_PROVIDER` to act on the provider that runs away.
+
+| Variable | Example | Description |
+|---|---|---|
+| `AGENTPULSE_VARIANT` | `five_hour` | The session quota that is used fast |
+| `AGENTPULSE_UTILIZATION` | `64` | Current usage of the session quota (integer) |
+| `AGENTPULSE_GROWTH` | `38` | Percentage points the quota grows per half hour at its current pace (integer) |
+| `AGENTPULSE_TYPICAL` | `14` | Your busiest half hours in the last 30 days, in percentage points (integer) |
+| `AGENTPULSE_RESETS_AT` | `2025-01-15T18:00:00+00:00` | When the session resets (ISO 8601, UTC) |
+| `AGENTPULSE_TITLE` | `Unusual usage` | Notification title (localized) |
+| `AGENTPULSE_MESSAGE` | `Claude is using its Session (5hr) unusually fast...` | Notification message (localized) |
+| `USAGE_MONITOR_EVENT` | `spike` | Event type |
+| `USAGE_MONITOR_VARIANT` | `five_hour` | The session quota that is used fast |
+| `USAGE_MONITOR_UTILIZATION` | `64` | Current usage of the session quota (integer) |
+| `USAGE_MONITOR_GROWTH` | `38` | Percentage points the quota grows per half hour at its current pace (integer) |
+| `USAGE_MONITOR_TYPICAL` | `14` | Your busiest half hours in the last 30 days, in percentage points (integer) |
+| `USAGE_MONITOR_RESETS_AT` | `2025-01-15T18:00:00+00:00` | When the session resets (ISO 8601, UTC) |
+| `USAGE_MONITOR_TITLE` | `Unusual usage` | Notification title (localized) |
+| `USAGE_MONITOR_MESSAGE` | `Claude is using its Session (5hr) unusually fast...` | Notification message (localized) |
 
 Provider-aware alerts use separate internal state per provider, so a Codex or Kimi threshold crossing does not suppress a Claude alert for the same quota name. Combine `AGENTPULSE_PROVIDER` with provider-specific thresholds such as `alert_thresholds_codex_five_hour` or `alert_thresholds_kimi_five_hour` when you want different behavior per provider.

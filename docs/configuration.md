@@ -42,6 +42,22 @@ Threshold lookup uses a fallback chain: exact match (e.g. `alert_thresholds_seve
 }
 ```
 
+## Runaway alert
+
+An agent stuck in a loop, or a background task that runs too aggressively, can use a session quota up in a fraction of the usual time. The app watches how fast each provider's session quota (its shortest quota window, such as the 5-hour session) grows and warns you when it is used unusually fast:
+
+```text
+Unusual usage
+Claude is using its Session (5hr) unusually fast: about 38 pp per half hour, usually at most 14 pp (noticed 03:10).
+```
+
+The pace is the growth over the last half hour. It counts as unusual when it is at least 1.5 times your busiest half hours - the 95th percentile of the earlier sessions of the last 30 days - and at least 15 percentage points. Nothing is reported before three earlier sessions with usage have been seen, so a new installation stays quiet until it has learned what is usual for you. A provider is warned about at most once an hour, however long the spike lasts, and the alert follows the same rules as other notifications: quiet hours and your absence hold it back until they end, and the away summary leaves it out of what it replaces, so you see it when you come back. `on_spike_command` runs immediately, also while you are away, which makes it the place to stop a runaway agent overnight; see [Event Commands](event-commands.md).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `spike_alert_enabled` | `true` | Warn when a session quota is used unusually fast. Also available in the dashboard's settings panel |
+| `on_spike_command` | *(none)* | Shell command (or array of commands) to run when the alert fires. Also available in the dashboard's settings panel, with a test button |
+
 ## While you were away
 
 When you lock the workstation or leave it idle for `idle_pause` seconds, the app holds back its desktop notifications. Come back after at least 15 minutes, and it reads every provider's usage right away and shows one notification that sums up your absence instead of the reset and threshold alerts held back meanwhile:
@@ -135,6 +151,7 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 |-----|---------|-------------|
 | `on_reset_command` | *(none)* | Shell command (or array of commands) to run when a quota resets (usage drops) |
 | `on_threshold_command` | *(none)* | Shell command (or array of commands) to run when usage crosses a configured alert threshold |
+| `on_spike_command` | *(none)* | Shell command (or array of commands) to run when a session quota is used unusually fast, see [Runaway alert](#runaway-alert) |
 
 ## Polling intervals
 
